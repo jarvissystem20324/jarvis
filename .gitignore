@@ -1,0 +1,15 @@
+.env
+venv/
+__pycache__/
+*.pyc
+.claude/settings.local.json
+
+# Keep the recovered original bytecode — it is the only copy of the code that
+# existed before the 2026-08-10 rebuild, so it must survive to the remote.
+!recovered_original_pyc/
+!recovered_original_pyc/*.pyc
+build/
+dist/
+release/
+output/
+jarvis-selftest.txt
