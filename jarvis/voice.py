@@ -1,8 +1,10 @@
 """Voice input/output for JARVIS.
 
-Speech uses OpenAI's audio models when a key is available, with an offline
-pyttsx3 fallback. Playback and recording both run off the calling thread so the
-Tk event loop never blocks.
+Speech out prefers OpenAI's voices when a paid key is present and falls back to
+the offline Windows voices, so it always works. Speech in walks the provider
+chain — Groq's Whisper is free — and can use a locally installed faster-whisper
+for full offline transcription. Playback and recording both run off the calling
+thread so the Tk event loop never blocks.
 """
 
 from __future__ import annotations
@@ -12,7 +14,8 @@ import re
 import threading
 import wave
 
-from .config import get_stt_model, get_tts_model, get_tts_voice
+from . import providers
+from .config import get_stt_provider, get_tts_model, get_tts_voice
 
 try:
     import numpy as np
@@ -51,7 +54,9 @@ class Voice:
         self._tts_ok = _HAS_AUDIO or _HAS_PYTTSX3
         # Set False after a key/quota failure so we stop paying the network
         # round-trip on every utterance and go straight to offline speech.
-        self._openai_tts_ok = _HAS_AUDIO
+        # Without an OpenAI key there is nothing to try in the first place.
+        self._openai_tts_ok = _HAS_AUDIO and providers.has_key(providers.OPENAI)
+        self._local_stt = None  # lazily loaded faster-whisper model
 
     # --- capability probing ----------------------------------------------
 
@@ -195,10 +200,7 @@ class Voice:
         if not pcm:
             return None
 
-        try:
-            return self._transcribe(self._to_wav(pcm))
-        except Exception as exc:
-            raise RuntimeError(f"Speech recognition unavailable: {exc}") from None
+        return self._transcribe(pcm)
 
     def _record(self, duration: float | None = None) -> bytes:
         """Record until the speaker stops, or for a fixed `duration` if given."""
@@ -263,15 +265,89 @@ class Voice:
             wav.writeframes(pcm)
         return buffer.getvalue()
 
-    @staticmethod
-    def _transcribe(wav_bytes: bytes) -> str | None:
-        from .client import get_client
+    def stt_available(self) -> bool:
+        """True when something can turn speech into text."""
+        return bool(providers.stt_chain()) or self._local_stt_installed()
 
+    def _transcribe(self, pcm: bytes) -> str | None:
+        """Try each transcription backend until one produces text."""
+        choice = get_stt_provider()
+        problems: list[str] = []
+
+        if choice != "local":
+            wav = self._to_wav(pcm)
+            chain = providers.stt_chain()
+            if choice not in {"auto", ""}:
+                chain = [p for p in chain if p.name == choice] or chain
+            for provider in chain:
+                try:
+                    return self._transcribe_remote(provider, wav)
+                except Exception as exc:
+                    problems.append(f"{provider.label}: {self._brief(exc)}")
+
+        # Local Whisper needs no key and no network, but only if installed.
+        if self._local_stt_installed():
+            try:
+                return self._transcribe_local(pcm)
+            except Exception as exc:
+                problems.append(f"local Whisper: {self._brief(exc)}")
+
+        raise RuntimeError(self._stt_help(problems))
+
+    @staticmethod
+    def _transcribe_remote(provider, wav_bytes: bytes) -> str | None:
         buffer = io.BytesIO(wav_bytes)
         buffer.name = "speech.wav"  # the SDK infers the format from the name
-        result = get_client().audio.transcriptions.create(
-            model=get_stt_model(),
+        result = providers.get_client(provider).audio.transcriptions.create(
+            model=providers.stt_model_for(provider),
             file=buffer,
         )
         text = (getattr(result, "text", "") or "").strip()
         return text or None
+
+    def _transcribe_local(self, pcm: bytes) -> str | None:
+        """Transcribe with faster-whisper, entirely offline.
+
+        Audio is handed over as a float32 array rather than a file so
+        faster-whisper never reaches for its PyAV decoding path.
+        """
+        if self._local_stt is None:
+            from faster_whisper import WhisperModel
+
+            from .config import get_setting
+
+            size = get_setting("JARVIS_WHISPER_MODEL", "base")
+            # int8 keeps it usable on a CPU-only machine.
+            self._local_stt = WhisperModel(size, device="cpu", compute_type="int8")
+
+        samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        segments, _info = self._local_stt.transcribe(samples, language=None)
+        text = " ".join(segment.text for segment in segments).strip()
+        return text or None
+
+    @staticmethod
+    def _local_stt_installed() -> bool:
+        import importlib.util
+
+        return importlib.util.find_spec("faster_whisper") is not None
+
+    @staticmethod
+    def _brief(exc: Exception) -> str:
+        text = str(getattr(exc, "message", None) or exc).strip()
+        low = text.lower()
+        if "api key" in low or "unauthorized" in low or "invalid_api_key" in low:
+            return "key rejected"
+        if "rate" in low and "limit" in low:
+            return "rate limited"
+        return text[:90] or exc.__class__.__name__
+
+    @staticmethod
+    def _stt_help(problems: list[str]) -> str:
+        detail = ("\n" + "\n".join(f"  - {p}" for p in problems)) if problems else ""
+        return (
+            "No speech-to-text backend is available." + detail + "\n\n"
+            "Add a free Groq key to .env for transcription:\n"
+            "  GROQ_API_KEY=...  (https://console.groq.com/keys)\n"
+            "Or install faster-whisper to transcribe offline:\n"
+            "  pip install faster-whisper"
+        )

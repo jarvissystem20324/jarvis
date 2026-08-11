@@ -70,12 +70,14 @@ class JarvisApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("JARVIS 2.0")
+        self.title(f"JARVIS {__version__}")
         self.geometry("1100x720")
         self.minsize(900, 600)
         self.configure(fg_color=COLORS["bg"])
 
         self.jarvis = Jarvis()
+        # The global-hotkey addon reaches back through this to raise the window.
+        self.jarvis.window = self
         self.current_image: Path | None = None
         self.active_tab = "chat"
         self._busy = False
@@ -194,7 +196,18 @@ class JarvisApp(ctk.CTk):
             text_color="#64748b",
             wraplength=190,
         )
-        self.status_label.pack(side="bottom", fill="x", padx=16, pady=16)
+        self.status_label.pack(side="bottom", fill="x", padx=16, pady=(4, 16))
+
+        # Which backend is answering — matters now that JARVIS can fall back
+        # between providers without saying so.
+        self.provider_label = ctk.CTkLabel(
+            sidebar,
+            text=self._provider_text(),
+            font=ctk.CTkFont(size=10),
+            text_color="#475569",
+            wraplength=190,
+        )
+        self.provider_label.pack(side="bottom", fill="x", padx=16, pady=(8, 0))
 
         # Main content area
         self.content = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
@@ -384,6 +397,36 @@ class JarvisApp(ctk.CTk):
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
+    def _provider_text(self) -> str:
+        from jarvis import providers
+
+        configured = [p.label for p in providers.chat_chain()]
+        if not configured:
+            return "No AI provider — add a free key (see README)"
+        active = self.jarvis.brain.active_label()
+        if active != "not connected":
+            return f"Brain: {active}"
+        return "Brain: " + ", ".join(configured)
+
+    def _refresh_provider(self) -> None:
+        try:
+            self.provider_label.configure(text=self._provider_text())
+        except Exception:
+            pass
+
+    def summon(self) -> None:
+        """Raise and focus the window — called by the global-hotkey addon."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            # Topmost briefly, or Windows may refuse focus to a background app.
+            self.attributes("-topmost", True)
+            self.after(300, lambda: self.attributes("-topmost", False))
+            self.chat_input.focus_set()
+        except Exception:
+            pass
+
     def _set_busy(self, busy: bool, status: str = "Ready") -> None:
         self._busy = busy
         state = "disabled" if busy else "normal"
@@ -418,6 +461,7 @@ class JarvisApp(ctk.CTk):
 
     def _handle_response(self, response: JarvisResponse) -> None:
         self._set_busy(False)
+        self._refresh_provider()
         self._append_message("JARVIS", response.text, is_user=False)
         if response.image_path:
             self.current_image = response.image_path

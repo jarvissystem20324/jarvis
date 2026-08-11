@@ -1,6 +1,6 @@
-"""JARVIS 2.0 — Just A Rather Very Intelligent System."""
+"""JARVIS — Just A Rather Very Intelligent System."""
 
 from .assistant import Jarvis, JarvisResponse
 
-__version__ = "2.1"
+__version__ = "2.2"
 __all__ = ["Jarvis", "JarvisResponse", "__version__"]

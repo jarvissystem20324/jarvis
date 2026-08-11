@@ -1,35 +1,33 @@
-"""Shared, lazily-created OpenAI client.
+"""Compatibility shim over the provider registry.
 
-Created on first use rather than at import time so the app can start (and show
-a readable error in the UI) when no API key is configured yet.
+Client construction moved to `jarvis.providers` when JARVIS gained free
+backends. This module keeps the old `get_client()` entry point working for code
+that specifically wants OpenAI (paid speech, image generation).
 """
 
 from __future__ import annotations
 
-import threading
-
 from openai import OpenAI
 
-from .config import get_api_key
+from . import providers
+from .config import get_api_key  # re-exported; callers still import it from here
 
-_client: OpenAI | None = None
-_lock = threading.Lock()
+__all__ = ["get_client", "reset_client", "rate_limit_message", "get_api_key"]
 
 
 def get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        with _lock:
-            if _client is None:
-                _client = OpenAI(api_key=get_api_key(), timeout=120.0, max_retries=2)
-    return _client
+    """The OpenAI-proper client. Raises if no OpenAI key is configured."""
+    if not providers.has_key(providers.OPENAI):
+        raise RuntimeError(
+            "OPENAI_API_KEY not set. JARVIS runs on free providers without it — "
+            "this path needs a paid OpenAI key specifically."
+        )
+    return providers.get_client(providers.OPENAI)
 
 
 def reset_client() -> None:
-    """Drop the cached client so a new key is picked up."""
-    global _client
-    with _lock:
-        _client = None
+    """Drop cached clients so a new key is picked up."""
+    providers.reset_clients()
 
 
 def rate_limit_message(exc: Exception) -> str:
@@ -40,8 +38,7 @@ def rate_limit_message(exc: Exception) -> str:
     text = str(getattr(exc, "message", None) or exc).lower()
     if "insufficient_quota" in text or "credit" in text or "billing" in text:
         return (
-            "Your OpenAI account is out of credits. Add funds at "
-            "https://platform.openai.com/settings/organization/billing/ "
-            "and try again."
+            "Your OpenAI account is out of credits. JARVIS can run on free "
+            "providers instead — see the Providers section of the README."
         )
     return "Rate limit reached. Please wait a moment and try again."

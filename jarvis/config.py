@@ -16,6 +16,12 @@ DEFAULT_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
 DEFAULT_TTS_VOICE = "onyx"
 
+# 'auto' picks a free backend unless a paid key is configured. See
+# jarvis/providers.py for the full chain and its ordering.
+DEFAULT_PROVIDER = "auto"
+DEFAULT_IMAGE_PROVIDER = "auto"
+DEFAULT_STT_PROVIDER = "auto"
+
 _loaded = False
 
 
@@ -64,6 +70,32 @@ def get_setting(name: str, default: str) -> str:
 
 def get_chat_model() -> str:
     return get_setting("JARVIS_MODEL", DEFAULT_CHAT_MODEL)
+
+
+def get_provider() -> str:
+    return get_setting("JARVIS_PROVIDER", DEFAULT_PROVIDER).lower()
+
+
+def get_image_provider() -> str:
+    return get_setting("JARVIS_IMAGE_PROVIDER", DEFAULT_IMAGE_PROVIDER).lower()
+
+
+def get_stt_provider() -> str:
+    return get_setting("JARVIS_STT_PROVIDER", DEFAULT_STT_PROVIDER).lower()
+
+
+def get_addons_dir() -> Path:
+    """Where addon .py files live. Created on demand."""
+    path = get_base_dir() / "addons"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_data_dir() -> Path:
+    """Writable store for addon state (memory, caches). Created on demand."""
+    path = get_base_dir() / "data"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_image_model() -> str:

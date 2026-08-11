@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import personality, tools
+from .addons import AddonManager
 from .brain import Brain
 from .config import voice_enabled_by_default
 from .images import DEFAULT_QUALITY, ImageGenerationError, ImageGenerator
@@ -27,6 +28,8 @@ class Jarvis:
         if voice_enabled is None:
             voice_enabled = voice_enabled_by_default()
         self.voice_enabled = bool(voice_enabled) and self.voice.available()
+        self.addons = AddonManager(self)
+        self.addons.load_all()
 
     def greet(self) -> str:
         text = personality.greeting()
@@ -96,14 +99,36 @@ class Jarvis:
                     )
                 return self.generate_image(args)
 
+            if name == "addons":
+                return JarvisResponse(text=self.addons.summary())
+
+            # Addons get a shot before the built-ins so they can't be shadowed
+            # by a command they were written to provide.
+            handled = self.addons.handle(name, args)
+            if handled is not None:
+                if isinstance(handled, JarvisResponse):
+                    return handled
+                text_out = str(handled)
+                self._maybe_speak(text_out)
+                return JarvisResponse(text=text_out)
+
             builtin = tools.try_handle_command(text)
             if builtin is not None:
+                if name == "help":
+                    builtin = self._with_addon_help(builtin)
                 self._maybe_speak(builtin)
                 return JarvisResponse(text=builtin)
 
-        reply = self.brain.chat(text)
+        reply = self.brain.chat(text, extra_context=self.addons.context_for(text) or None)
+        self.addons.notify_reply(text, reply)
         self._maybe_speak(reply)
         return JarvisResponse(text=reply)
+
+    def _with_addon_help(self, builtin: str) -> str:
+        lines = self.addons.help_lines()
+        if not lines:
+            return builtin
+        return builtin + "\n\nFrom addons:\n" + "\n".join(lines)
 
     def listen_and_respond(self) -> JarvisResponse | None:
         if not self.voice_enabled:

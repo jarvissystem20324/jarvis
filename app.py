@@ -38,14 +38,37 @@ def selftest() -> int:
     check("customtkinter", lambda: __import__("customtkinter").__version__)
     check("openai sdk", lambda: __import__("openai").__version__)
 
-    from jarvis.config import get_chat_model, get_image_model
+    from jarvis import providers
+    from jarvis.config import get_image_provider
 
-    check("chat model", get_chat_model)
-    check("image model", get_image_model)
-    check("api key", lambda: "present" if __import__(
-        "jarvis.config", fromlist=["get_api_key"]).get_api_key() else "missing")
+    # A configured provider is what makes the app usable at all, so name every
+    # one rather than just reporting whether a single key exists.
+    for label, configured, _note in providers.describe():
+        lines.append(f"[{' OK ' if configured else '    '}] provider {label}: "
+                     f"{'configured' if configured else 'not configured'}")
+
+    check("chat chain", lambda: ", ".join(p.label for p in providers.chat_chain())
+          or "NONE — add a free key, see README")
+    check("speech-to-text", lambda: ", ".join(p.label for p in providers.stt_chain())
+          or "none (needs a free Groq key or faster-whisper)")
+    check("image backend", lambda: "OpenAI (paid)"
+          if get_image_provider() == "openai"
+          else "Pollinations (free, no key)")
     check("output dir", lambda: __import__(
         "jarvis.config", fromlist=["get_output_dir"]).get_output_dir())
+
+    def _addons() -> str:
+        from jarvis.addons import AddonManager
+
+        manager = AddonManager(jarvis=None)
+        manager.load_all()
+        names = [entry.addon.name for entry in manager.loaded]
+        report = f"{len(names)} loaded ({', '.join(names)})" if names else "none found"
+        if manager.errors:
+            report += f" | problems: {'; '.join(manager.errors)}"
+        return report
+
+    check("addons", _addons)
 
     report = "\n".join(lines)
     print(report)

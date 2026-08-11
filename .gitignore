@@ -13,3 +13,8 @@ dist/
 release/
 output/
 jarvis-selftest.txt
+
+# Addon state — memory.json holds personal facts the user asked JARVIS to
+# remember, so it stays on the machine that created it.
+data/
+addons/.seeded
