@@ -48,7 +48,10 @@ GEMINI = Provider(
     label="Google Gemini",
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     key_env="GEMINI_API_KEY",
-    chat_model="gemini-2.5-flash",
+    # A moving alias, deliberately. Pinning a version here went stale between
+    # two releases — gemini-2.5-flash was retired for new keys — and a dead
+    # default silently demotes the provider on first use.
+    chat_model="gemini-flash-latest",
     free=True,
     signup="https://aistudio.google.com/apikey",
     notes="Free tier, generous daily limit, understands images.",
