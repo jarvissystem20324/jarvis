@@ -2,5 +2,5 @@
 
 from .assistant import Jarvis, JarvisResponse
 
-__version__ = "2.2"
+__version__ = "2.3"
 __all__ = ["Jarvis", "JarvisResponse", "__version__"]
