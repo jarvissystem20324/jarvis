@@ -70,6 +70,21 @@ def selftest() -> int:
 
     check("addons", _addons)
 
+    def _tls() -> str:
+        """Prove HTTPS actually verifies here.
+
+        A missing certificate store only shows up on other people's machines,
+        so make one real request rather than trusting that it works.
+        """
+        from jarvis import net
+
+        source = "certifi bundle" if net.using_certifi() else "OS certificate store"
+        with net.urlopen("https://api.github.com/", timeout=20) as response:
+            code = response.status
+        return f"verified via {source} (HTTP {code})"
+
+    check("https/TLS", _tls)
+
     report = "\n".join(lines)
     print(report)
     try:

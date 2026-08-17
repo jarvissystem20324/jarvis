@@ -21,7 +21,7 @@ from pathlib import Path
 
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
-from . import providers
+from . import net, providers
 from .config import get_image_model, get_image_provider, get_output_dir
 
 # Labels shown in the UI -> pixel sizes.
@@ -109,10 +109,9 @@ class ImageGenerator:
             }
         )
         url = f"{POLLINATIONS_URL}{urllib.parse.quote(prompt, safe='')}?{query}"
-        request = urllib.request.Request(url, headers={"User-Agent": "JARVIS"})
 
         try:
-            with urllib.request.urlopen(request, timeout=POLLINATIONS_TIMEOUT) as response:
+            with net.urlopen(url, timeout=POLLINATIONS_TIMEOUT) as response:
                 data = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
@@ -125,8 +124,10 @@ class ImageGenerator:
                 f"Free image service returned HTTP {exc.code}. Try again shortly."
             ) from None
         except (urllib.error.URLError, OSError) as exc:
+            explanation = net.describe_ssl_error(exc)
             raise ImageGenerationError(
-                f"Can't reach the image service: {exc}. Check your connection."
+                explanation
+                or f"Can't reach the image service: {exc}. Check your connection."
             ) from None
 
         if not self._looks_like_image(data):
@@ -185,7 +186,7 @@ class ImageGenerator:
         url = getattr(item, "url", None)
         if url:
             try:
-                with urllib.request.urlopen(url, timeout=60) as resp:
+                with net.urlopen(url, timeout=60) as resp:
                     return resp.read()
             except OSError as exc:
                 raise ImageGenerationError(f"Could not download the image: {exc}") from None

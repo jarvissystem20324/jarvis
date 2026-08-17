@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 
+from . import net
 from .config import get_setting, load_config
 
 
@@ -280,7 +281,7 @@ def pollinations_chat(model: str, messages: list[dict], timeout: int = 90) -> st
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with net.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read())
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:200].decode("utf-8", "replace")
@@ -290,7 +291,7 @@ def pollinations_chat(model: str, messages: list[dict], timeout: int = 90) -> st
             raise HttpChatError(f"refused the request (HTTP {exc.code})") from None
         raise HttpChatError(f"HTTP {exc.code}: {detail}") from None
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-        raise HttpChatError(str(exc)[:120]) from None
+        raise HttpChatError(net.describe_ssl_error(exc) or str(exc)[:120]) from None
 
     try:
         return (payload["choices"][0]["message"]["content"] or "").strip()

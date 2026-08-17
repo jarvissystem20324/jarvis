@@ -18,6 +18,10 @@ hiddenimports = [
     # Addons are imported dynamically, so nothing they need is detectable by
     # static analysis — list their dependencies explicitly.
     "pypdf",
+    # jarvis/net.py pins TLS verification to certifi's bundle. Without the
+    # module present, frozen builds fall back to the OS certificate store and
+    # fail on machines that lack the roots.
+    "certifi",
 ]
 
 # customtkinter ships its theme JSON as package data.

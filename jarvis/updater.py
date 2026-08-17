@@ -26,6 +26,8 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+
+from . import net
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,13 +91,18 @@ def check_for_update(url: str | None = None) -> UpdateInfo | None:
         )
     _require_https(manifest_url, "Update URL")
 
-    request = urllib.request.Request(manifest_url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=CONNECT_TIMEOUT) as response:
+        with net.urlopen(
+            net.request(manifest_url, {"User-Agent": USER_AGENT}),
+            timeout=CONNECT_TIMEOUT,
+        ) as response:
             raw = response.read(256 * 1024)
     except urllib.error.HTTPError as exc:
         raise UpdateError(f"Update server returned HTTP {exc.code}.") from None
     except (urllib.error.URLError, OSError) as exc:
+        explanation = net.describe_ssl_error(exc)
+        if explanation:
+            raise UpdateError(explanation) from None
         raise UpdateError(f"Could not reach the update server: {exc}") from None
 
     try:
@@ -122,11 +129,13 @@ def check_for_update(url: str | None = None) -> UpdateInfo | None:
 def download_update(info: UpdateInfo, progress=None) -> Path:
     """Download to a staging file and verify its checksum before returning."""
     target = get_base_dir() / DOWNLOAD_NAME
-    request = urllib.request.Request(info.url, headers={"User-Agent": USER_AGENT})
     digest = hashlib.sha256()
 
     try:
-        with urllib.request.urlopen(request, timeout=CONNECT_TIMEOUT) as response:
+        with net.urlopen(
+            net.request(info.url, {"User-Agent": USER_AGENT}),
+            timeout=CONNECT_TIMEOUT,
+        ) as response:
             total = int(response.headers.get("Content-Length") or 0)
             done = 0
             with open(target, "wb") as handle:
