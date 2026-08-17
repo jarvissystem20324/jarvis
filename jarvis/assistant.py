@@ -102,8 +102,9 @@ class Jarvis:
             if name == "addons":
                 return JarvisResponse(text=self.addons.summary())
 
-            # Addons get a shot before the built-ins so they can't be shadowed
-            # by a command they were written to provide.
+            # Addons are dispatched before the offline tools so they can add
+            # new commands. They cannot capture a built-in: the loader refuses
+            # to register anything in RESERVED_COMMANDS.
             handled = self.addons.handle(name, args)
             if handled is not None:
                 if isinstance(handled, JarvisResponse):

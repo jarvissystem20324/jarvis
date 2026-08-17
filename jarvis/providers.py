@@ -37,6 +37,9 @@ class Provider:
     # "sdk" speaks through the OpenAI client; "http" is hand-rolled for
     # services the SDK cannot be made to satisfy.
     transport: str = "sdk"
+    # Whether this provider's default model accepts images. Sending a picture
+    # to one that can't produces an opaque API error, so we skip it instead.
+    vision: bool = False
 
 
 # --- chat -----------------------------------------------------------------
@@ -53,6 +56,7 @@ GEMINI = Provider(
     # default silently demotes the provider on first use.
     chat_model="gemini-flash-latest",
     free=True,
+    vision=True,
     signup="https://aistudio.google.com/apikey",
     notes="Free tier, generous daily limit, understands images.",
 )
@@ -77,6 +81,7 @@ OPENAI = Provider(
     chat_model="gpt-5.4-mini",
     stt_model="gpt-4o-mini-transcribe",
     free=False,
+    vision=True,
     signup="https://platform.openai.com/api-keys",
     notes="Paid. Highest quality, needs credit on the account.",
 )
@@ -149,8 +154,17 @@ def chat_chain() -> list[Provider]:
 
 
 def stt_chain() -> list[Provider]:
-    """Providers to try for transcription. Groq's Whisper is free."""
-    return [p for p in STT_PROVIDERS if has_key(p) and p.stt_model]
+    """Providers to try for transcription, honouring JARVIS_STT_PROVIDER.
+
+    A pin that can't be satisfied returns nothing rather than quietly falling
+    back: someone who names a free provider should not be billed by a paid one
+    because of a typo in a key.
+    """
+    usable = [p for p in STT_PROVIDERS if has_key(p) and p.stt_model]
+    pinned = get_setting("JARVIS_STT_PROVIDER", "auto").lower()
+    if pinned in {"auto", "", "local"}:
+        return usable
+    return [p for p in usable if p.name == pinned]
 
 
 def model_for(provider: Provider) -> str:

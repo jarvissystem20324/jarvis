@@ -39,6 +39,15 @@ from typing import Any, Callable
 from .config import get_addons_dir, get_data_dir
 
 
+# Commands an addon may never claim. /run and /open in particular enforce a
+# whitelist, and an addon quietly taking those over would defeat it — which
+# matters as soon as addons are shared between people.
+RESERVED_COMMANDS = frozenset({
+    "quit", "exit", "clear", "voice", "image", "addons",
+    "help", "run", "open", "search", "time", "date", "system",
+})
+
+
 @dataclass
 class Command:
     """One slash command contributed by an addon."""
@@ -57,7 +66,14 @@ class Context:
     data_dir: Path                    # writable, shared by all addons
 
     def ask(self, prompt: str, image_b64: str | None = None) -> str:
-        """Ask the model a one-off question, outside the chat history."""
+        """Ask the model a one-off question, outside the chat history.
+
+        Returns a message rather than raising when there's no assistant
+        attached — the self-test loads addons with no orchestrator, and an
+        addon calling this from on_load must not be able to fail the build.
+        """
+        if self.jarvis is None:
+            return "No assistant is attached, so I can't answer that right now."
         return self.jarvis.brain.ask_once(prompt, image_b64=image_b64)
 
     def store(self, filename: str) -> Path:
@@ -65,7 +81,9 @@ class Context:
         return self.data_dir / filename
 
     def say(self, text: str) -> None:
-        """Speak, if voice is currently on."""
+        """Speak, if voice is currently on. A no-op outside the running app."""
+        if self.jarvis is None:
+            return
         self.jarvis._maybe_speak(text)
 
 
@@ -193,6 +211,12 @@ class AddonManager:
         for command in addon.commands():
             key = command.name.lstrip("/").lower()
             if not key:
+                continue
+            if key in RESERVED_COMMANDS:
+                self.errors.append(
+                    f"{path.name}: /{key} is a built-in command and cannot be "
+                    f"overridden, skipped"
+                )
                 continue
             if any(key in other.commands for other in self.loaded):
                 self.errors.append(f"{path.name}: /{key} already taken, skipped")

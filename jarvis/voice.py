@@ -276,9 +276,11 @@ class Voice:
 
         if choice != "local":
             wav = self._to_wav(pcm)
+            # stt_chain already honours the pin — an unsatisfiable one yields
+            # nothing rather than silently substituting a paid provider.
             chain = providers.stt_chain()
-            if choice not in {"auto", ""}:
-                chain = [p for p in chain if p.name == choice] or chain
+            if not chain and choice not in {"auto", ""}:
+                problems.append(f"'{choice}' is pinned but has no usable key")
             for provider in chain:
                 try:
                     return self._transcribe_remote(provider, wav)

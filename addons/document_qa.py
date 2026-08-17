@@ -30,6 +30,8 @@ class DocumentQA(Addon):
     def __init__(self):
         self.path: Path | None = None
         self.text: str = ""
+        # Which document has already been placed in the conversation.
+        self._sent_for: Path | None = None
 
     def commands(self):
         return [
@@ -138,6 +140,7 @@ class DocumentQA(Addon):
 
         self.path = path
         self.text = text
+        self._sent_for = None
         words = len(text.split())
         truncated = (
             f"\nOnly the first {MAX_CONTEXT_CHARS:,} characters will be used as context."
@@ -156,6 +159,7 @@ class DocumentQA(Addon):
         name = self.path.name
         self.path = None
         self.text = ""
+        self._sent_for = None
         return f"Closed {name}."
 
     def summarise(self, ctx, args: str) -> str:
@@ -170,8 +174,20 @@ class DocumentQA(Addon):
     # --- conversation hook ------------------------------------------------
 
     def enrich_prompt(self, ctx, text: str) -> str | None:
+        """Attach the document, but not to every message.
+
+        Re-sending 60k characters on every turn burns a free tier's per-minute
+        token budget within a few messages. Sending it once per conversation
+        is enough: it stays in the history the model already receives.
+        """
         if not self.text:
             return None
+        # /clear wipes the history holding the document, so send it again.
+        brain = getattr(ctx.jarvis, "brain", None)
+        forgotten = not getattr(brain, "history", None)
+        if self._sent_for == self.path and not forgotten:
+            return None
+        self._sent_for = self.path
         return (
             f"The user has this document open — use it to answer if relevant.\n"
             f"--- {self.path.name} ---\n{self.text[:MAX_CONTEXT_CHARS]}\n--- end ---"

@@ -8,6 +8,8 @@ error and losing the conversation.
 
 from __future__ import annotations
 
+import time
+
 from openai import (
     APIConnectionError,
     APIError,
@@ -25,6 +27,15 @@ from .providers import Provider
 # prompt is prepended separately and never counted against this.
 MAX_HISTORY_MESSAGES = 40
 
+# How long a throttled provider is skipped before it's tried again. Long
+# enough to clear a per-minute limit, short enough that the user's preferred
+# backend comes back on its own within a conversation.
+COOLDOWN_SECONDS = 75.0
+
+# Shorter pause for one-off errors (a dropped connection, a 5xx), which are
+# far more likely to clear immediately than a rate limit is.
+ERROR_COOLDOWN_SECONDS = 20.0
+
 
 class Brain:
     def __init__(self, model: str | None = None):
@@ -34,6 +45,8 @@ class Brain:
         # Providers that failed in a way retrying won't fix (bad key, no
         # credit). Skipped for the rest of the session.
         self._dead: set[str] = set()
+        # Provider name -> monotonic time it may be tried again.
+        self._cooldown: dict[str, float] = {}
         # gpt-5 series rejects `max_tokens`; others reject
         # `max_completion_tokens`. Learned per provider on first failure.
         self._token_param: dict[str, str] = {}
@@ -104,27 +117,55 @@ class Brain:
 
     # --- provider walking -------------------------------------------------
 
-    def _chain(self) -> list[Provider]:
-        return [p for p in providers.chat_chain() if p.name not in self._dead]
+    def _chain(self, vision: bool = False) -> list[Provider]:
+        now = time.monotonic()
+        chain = [
+            p
+            for p in providers.chat_chain()
+            if p.name not in self._dead and self._cooldown.get(p.name, 0.0) <= now
+        ]
+        if vision:
+            # A text-only model answers an image with an opaque 400. Skipping
+            # is both faster and produces an error the user can act on.
+            chain = [p for p in chain if p.vision]
+        return chain
 
     def _chat_over_chain(
         self, messages: list[dict], vision: bool = False
     ) -> tuple[str | None, str | None]:
-        chain = self._chain()
+        chain = self._chain(vision=vision)
         if not chain:
+            if vision and self._chain():
+                return None, (
+                    "None of your configured providers can see images.\n"
+                    "Add a free Gemini key for vision: "
+                    "https://aistudio.google.com/apikey"
+                )
             return None, self._no_provider_message()
 
-        # Whatever answered last time goes first — no point re-probing.
-        if self._active and self._active in chain:
-            chain = [self._active, *[p for p in chain if p is not self._active]]
-
+        # Deliberately not reordered around whatever answered last. The chain
+        # is preference order, and backing off failures is already handled by
+        # _dead and _cooldown — so a provider that was briefly throttled comes
+        # back to the front on its own instead of the session being stuck on
+        # the fallback for good.
         problems: list[str] = []
         for provider in chain:
             try:
                 reply = self._complete(provider, messages)
-            except (AuthenticationError, RateLimitError) as exc:
-                # A bad key or an empty balance won't resolve mid-session.
+            except AuthenticationError as exc:
+                # A rejected key won't start working mid-session.
                 self._dead.add(provider.name)
+                problems.append(f"{provider.label}: {self._short(exc)}")
+                continue
+            except RateLimitError as exc:
+                # 429 means two very different things. An exhausted balance is
+                # permanent; ordinary throttling clears in seconds, and free
+                # tiers throttle routinely — retiring the provider over one
+                # would silently push the whole session onto a paid backend.
+                if self._is_out_of_credit(exc):
+                    self._dead.add(provider.name)
+                else:
+                    self._cooldown[provider.name] = time.monotonic() + COOLDOWN_SECONDS
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
             except NotFoundError:
@@ -138,12 +179,15 @@ class Brain:
                 self._dead.add(provider.name)
                 continue
             except providers.HttpChatError as exc:
+                self._back_off(provider)
                 problems.append(f"{provider.label}: {exc}")
                 continue
             except (APIConnectionError, APIStatusError, APIError) as exc:
+                self._back_off(provider)
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
             except Exception as exc:  # a provider returning junk shouldn't crash us
+                self._back_off(provider)
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
 
@@ -216,6 +260,29 @@ class Brain:
             word in text
             for word in ("unsupported", "not supported", "unrecognized", "invalid", "does not support")
         )
+
+    def _back_off(self, provider: Provider) -> None:
+        """Skip a misbehaving provider briefly, without retiring it.
+
+        Short enough that a blip doesn't cost the user their preferred
+        backend, long enough not to re-probe it on every single message.
+        """
+        self._cooldown[provider.name] = time.monotonic() + ERROR_COOLDOWN_SECONDS
+
+    @staticmethod
+    def _is_out_of_credit(exc: Exception) -> bool:
+        """Tell an exhausted balance apart from ordinary throttling."""
+        text = str(getattr(exc, "message", None) or exc).lower()
+        return any(
+            marker in text
+            for marker in ("insufficient_quota", "billing", "credit", "exceeded your current quota")
+        )
+
+    def reset_failures(self) -> None:
+        """Forget which providers failed — call after keys change."""
+        self._dead.clear()
+        self._cooldown.clear()
+        self._active = None
 
     @staticmethod
     def _short(exc: Exception) -> str:

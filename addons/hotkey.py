@@ -115,7 +115,12 @@ class GlobalHotkey(Addon):
         self._status = "listening"
         message = wintypes.MSG()
         try:
-            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) != 0:
+            while True:
+                # GetMessageW returns 0 for WM_QUIT and -1 on error. Treating
+                # -1 as a message would spin this thread at 100% CPU forever.
+                result = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
+                if result in (0, -1):
+                    break
                 if message.message == WM_HOTKEY:
                     self._summon(ctx)
         finally:
