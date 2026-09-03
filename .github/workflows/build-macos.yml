@@ -1,0 +1,169 @@
+name: Build macOS app
+
+# PyInstaller cannot cross-compile, so the .app has to be produced on real
+# macOS. This runs on GitHub's Mac runners.
+#
+# It builds unsigned by default so it works with no setup at all. If the Apple
+# signing secrets are present it also signs, notarises and staples, which is
+# the only thing that stops macOS warning users the app is from an
+# unidentified developer. See PUBLISHING-MAC.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Two runners because a PyInstaller build only targets its own
+          # architecture. Apple Silicon and Intel Macs need separate downloads.
+          - runner: macos-14
+            arch: arm64
+            label: apple-silicon
+          - runner: macos-13
+            arch: x86_64
+            label: intel
+
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.label }} (${{ matrix.arch }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Only the opt-in global hotkey uses this.
+          pip install pynput
+
+      - name: Build the .icns icon
+        run: |
+          set -euo pipefail
+          mkdir -p build/jarvis.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size assets/jarvis.png \
+              --out "build/jarvis.iconset/icon_${size}x${size}.png" >/dev/null
+            double=$((size * 2))
+            sips -z $double $double assets/jarvis.png \
+              --out "build/jarvis.iconset/icon_${size}x${size}@2x.png" >/dev/null
+          done
+          iconutil -c icns build/jarvis.iconset -o assets/jarvis.icns
+          ls -la assets/jarvis.icns
+
+      - name: Build JARVIS.app
+        run: |
+          set -euo pipefail
+          python -m PyInstaller --clean --noconfirm JARVIS-mac.spec
+          test -d "dist/JARVIS.app" || { echo "no .app produced"; exit 1; }
+
+      - name: Verify the app actually runs
+        run: |
+          set -euo pipefail
+          # Same gate as the Windows build: refuse to ship something that does
+          # not start. A windowed build reports nothing when it dies.
+          ./dist/JARVIS.app/Contents/MacOS/JARVIS --selftest || true
+          report="$HOME/Library/Application Support/JARVIS/jarvis-selftest.txt"
+          if [ ! -f "$report" ]; then
+            echo "::error::the app produced no self-test report — it did not run"
+            exit 1
+          fi
+          cat "$report"
+          if grep -q '^\[FAIL\]' "$report"; then
+            echo "::error::self-test reported failures"
+            exit 1
+          fi
+
+      - name: Import signing certificate
+        id: signing
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE }}
+          CERT_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CERT:-}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No signing certificate configured — building unsigned."
+            exit 0
+          fi
+          echo "$CERT" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p runner build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p runner build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$CERT_PWD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k runner build.keychain >/dev/null
+          rm -f /tmp/cert.p12
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sign, notarise and staple
+        if: steps.signing.outputs.available == 'true'
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PWD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # --deep is deprecated and misses nested code; sign inside-out.
+          find dist/JARVIS.app -type f \( -name "*.dylib" -o -name "*.so" \) \
+            -exec codesign --force --timestamp --options runtime \
+            --entitlements entitlements.plist -s "$IDENTITY" {} \;
+          codesign --force --timestamp --options runtime \
+            --entitlements entitlements.plist -s "$IDENTITY" dist/JARVIS.app
+          codesign --verify --strict --verbose=2 dist/JARVIS.app
+
+          ditto -c -k --keepParent dist/JARVIS.app /tmp/notarize.zip
+          xcrun notarytool submit /tmp/notarize.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_PWD" --team-id "$TEAM_ID" \
+            --wait
+          # Stapling lets the app open on a machine that is offline.
+          xcrun stapler staple dist/JARVIS.app
+          spctl --assess --type execute --verbose dist/JARVIS.app
+
+      - name: Ad-hoc sign (unsigned builds only)
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          # Does NOT satisfy Gatekeeper for a download, but keeps the bundle
+          # internally consistent so it runs once the quarantine flag is off,
+          # and is required at all on Apple Silicon.
+          codesign --force --deep -s - dist/JARVIS.app
+          codesign --verify --verbose=2 dist/JARVIS.app || true
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          # ditto, not zip: it preserves the bundle structure and signature.
+          ditto -c -k --keepParent dist/JARVIS.app \
+            "JARVIS-macos-${{ matrix.arch }}.zip"
+          hdiutil create -volname "JARVIS" -srcfolder dist/JARVIS.app \
+            -ov -format UDZO "JARVIS-macos-${{ matrix.arch }}.dmg"
+          shasum -a 256 JARVIS-macos-${{ matrix.arch }}.* | tee checksums-${{ matrix.arch }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-macos-${{ matrix.arch }}
+          path: |
+            JARVIS-macos-${{ matrix.arch }}.zip
+            JARVIS-macos-${{ matrix.arch }}.dmg
+            checksums-${{ matrix.arch }}.txt
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            "JARVIS-macos-${{ matrix.arch }}.zip" \
+            "JARVIS-macos-${{ matrix.arch }}.dmg" \
+            --clobber

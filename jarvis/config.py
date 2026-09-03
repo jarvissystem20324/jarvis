@@ -25,10 +25,48 @@ DEFAULT_STT_PROVIDER = "auto"
 _loaded = False
 
 
-def get_base_dir() -> Path:
-    """Directory the app lives in — next to the EXE when frozen."""
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform.startswith("win")
+
+
+def get_app_dir() -> Path:
+    """Where the application itself lives — read-only once installed."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
+def get_base_dir() -> Path:
+    """Root for everything the app writes: .env, addons, images, addon state.
+
+    On Windows this stays beside the EXE, which keeps existing installs
+    working and keeps the app portable on a USB stick.
+
+    On macOS it must NOT be beside the executable. A frozen build lives at
+    JARVIS.app/Contents/MacOS/JARVIS, so writing next to it means writing
+    inside the bundle — which invalidates the code signature and gets the app
+    refused by Gatekeeper, quite apart from /Applications often not being
+    user-writable. Apple's answer is Application Support, so use that.
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent.parent
+
+    if IS_MACOS:
+        home = Path.home() / "Library" / "Application Support" / "JARVIS"
+        home.mkdir(parents=True, exist_ok=True)
+        return home
+    if not IS_WINDOWS:
+        home = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "jarvis"
+        home.mkdir(parents=True, exist_ok=True)
+        return home
+    return Path(sys.executable).parent
+
+
+def get_bundled_dir() -> Path:
+    """Read-only resources shipped inside the build (addons, assets)."""
+    bundle = getattr(sys, "_MEIPASS", "")
+    if bundle:
+        return Path(bundle)
     return Path(__file__).resolve().parent.parent
 
 
@@ -39,12 +77,30 @@ def get_output_dir() -> Path:
     return path
 
 
+def _seed_env(env_path: Path) -> None:
+    """Put a starter .env in place on first run.
+
+    Windows gets one written by the installer. macOS has no installer — the
+    app is dragged to /Applications — so without this the user has nowhere
+    obvious to put their key.
+    """
+    if env_path.exists() or not getattr(sys, "frozen", False):
+        return
+    template = get_bundled_dir() / ".env.example"
+    try:
+        if template.is_file():
+            env_path.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def load_config() -> None:
-    """Load .env from beside the app. Safe to call repeatedly."""
+    """Load .env from the writable data directory. Safe to call repeatedly."""
     global _loaded
     if _loaded:
         return
     env_path = get_base_dir() / ".env"
+    _seed_env(env_path)
     if env_path.exists():
         load_dotenv(env_path)
     else:

@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import io
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import wave
 
 from . import providers
-from .config import get_stt_provider, get_tts_model, get_tts_voice
+from .config import IS_MACOS, get_stt_provider, get_tts_model, get_tts_voice
 
 try:
     import numpy as np
@@ -57,6 +60,7 @@ class Voice:
         # Without an OpenAI key there is nothing to try in the first place.
         self._openai_tts_ok = _HAS_AUDIO and providers.has_key(providers.OPENAI)
         self._local_stt = None  # lazily loaded faster-whisper model
+        self._say_proc: subprocess.Popen | None = None
 
     # --- capability probing ----------------------------------------------
 
@@ -118,6 +122,13 @@ class Voice:
             except Exception:
                 pass
         with self._lock:
+            proc = self._say_proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        with self._lock:
             thread = self._speak_thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=2.0)
@@ -164,7 +175,37 @@ class Voice:
             return False
         return True
 
+    def _speak_macos(self, text: str) -> None:
+        """Speak through macOS's built-in `say`.
+
+        pyttsx3's Mac driver drives NSSpeechSynthesizer through an event loop
+        that fights Tk's, and fails outright on recent macOS. `say` is a plain
+        subprocess: reliable, always present, and killable, which is what makes
+        stop() actually stop.
+        """
+        try:
+            proc = subprocess.Popen(
+                ["say", "-r", "175", "--", text[:4000]],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return
+        with self._lock:
+            self._say_proc = proc
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                if self._say_proc is proc:
+                    self._say_proc = None
+
     def _speak_offline(self, text: str) -> None:
+        if IS_MACOS and shutil.which("say"):
+            self._speak_macos(text)
+            return
         if not _HAS_PYTTSX3:
             return
         try:

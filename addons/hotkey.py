@@ -1,20 +1,26 @@
 """Global hotkey — bring JARVIS to the front from anywhere.
 
-Ctrl+Alt+J by default. Uses the Win32 RegisterHotKey API through ctypes, so
-there's no extra dependency and no keyboard hook that antivirus software might
-object to. Only the chosen combination is ever received; this cannot see any
-other keystroke.
+Windows uses the Win32 RegisterHotKey API through ctypes: no dependency, no
+keyboard hook, and the OS hands us only the one combination we registered.
+Ctrl+Alt+J by default.
 
-Windows only. On anything else the addon loads and does nothing.
+macOS has no equivalent that works without permission. Watching for a shortcut
+system-wide means an input monitor, which macOS gates behind Accessibility —
+the same permission a keylogger needs, and the same alarming prompt. So on
+macOS this stays off unless you deliberately set JARVIS_HOTKEY in your .env.
+A fresh install therefore asks for nothing, and you opt in only if you want it.
+
+Nothing here records what you type. Windows delivers only the registered
+combination; the macOS listener matches against that combination and discards
+everything else.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
 
 from jarvis.addons import Addon, Command
-from jarvis.config import get_setting
+from jarvis.config import IS_MACOS, IS_WINDOWS, get_setting
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -24,14 +30,16 @@ WM_HOTKEY = 0x0312
 
 MODIFIERS = {
     "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
-    "alt": MOD_ALT, "shift": MOD_SHIFT,
-    "win": MOD_WIN, "super": MOD_WIN,
+    "alt": MOD_ALT, "option": MOD_ALT, "shift": MOD_SHIFT,
+    "win": MOD_WIN, "super": MOD_WIN, "cmd": MOD_WIN, "command": MOD_WIN,
 }
+
+WINDOWS_DEFAULT = "ctrl+alt+j"
 
 
 class GlobalHotkey(Addon):
     name = "hotkey"
-    version = "1.0"
+    version = "2.0"
     description = "Summons the window with a global keyboard shortcut."
 
     def __init__(self):
@@ -43,36 +51,58 @@ class GlobalHotkey(Addon):
         return [Command("hotkey", self.status, "Show the summon shortcut", "/hotkey")]
 
     def status(self, ctx, args: str) -> str:
-        if not sys.platform.startswith("win"):
-            return "Global hotkeys are Windows-only, so this addon is idle."
+        if not self._combo:
+            if IS_MACOS:
+                return (
+                    "No summon shortcut is set.\n\n"
+                    "On macOS this is off by default, because watching for a "
+                    "shortcut system-wide needs Accessibility permission — the "
+                    "same one a keylogger asks for. To enable it, add a line "
+                    "like this to your .env and restart:\n"
+                    "    JARVIS_HOTKEY=cmd+shift+j\n\n"
+                    "macOS will then ask you to allow JARVIS under\n"
+                    "System Settings > Privacy & Security > Accessibility."
+                )
+            return "No summon shortcut is configured (set JARVIS_HOTKEY in .env)."
         return (
-            f"Summon shortcut: {self._combo or 'none'}\nStatus: {self._status}\n"
+            f"Summon shortcut: {self._combo}\nStatus: {self._status}\n"
             "Change it with JARVIS_HOTKEY in .env, e.g. JARVIS_HOTKEY=ctrl+alt+space"
         )
 
     # --- setup ------------------------------------------------------------
 
     def on_load(self, ctx) -> None:
-        if not sys.platform.startswith("win"):
-            self._status = "inactive (not Windows)"
-            return
-
-        combo = get_setting("JARVIS_HOTKEY", "ctrl+alt+j")
-        parsed = self._parse(combo)
-        if parsed is None:
-            self._status = f"invalid combination '{combo}'"
+        # Windows keeps its long-standing default; macOS requires opting in.
+        default = WINDOWS_DEFAULT if IS_WINDOWS else ""
+        combo = get_setting("JARVIS_HOTKEY", default).strip()
+        if not combo:
+            self._status = "disabled (no JARVIS_HOTKEY set)"
             return
 
         self._combo = combo.lower()
+        if IS_WINDOWS:
+            self._start_windows(ctx)
+        elif IS_MACOS:
+            self._start_macos(ctx)
+        else:
+            self._status = "unsupported on this platform"
+
+    # --- Windows ----------------------------------------------------------
+
+    def _start_windows(self, ctx) -> None:
+        parsed = self._parse_windows(self._combo)
+        if parsed is None:
+            self._status = f"invalid combination '{self._combo}'"
+            return
         modifiers, key = parsed
         # Daemon thread: the message loop must not keep the app alive on exit.
         self._thread = threading.Thread(
-            target=self._listen, args=(ctx, modifiers, key), daemon=True
+            target=self._listen_windows, args=(ctx, modifiers, key), daemon=True
         )
         self._thread.start()
 
     @staticmethod
-    def _parse(combo: str):
+    def _parse_windows(combo: str):
         parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
         if not parts:
             return None
@@ -99,9 +129,7 @@ class GlobalHotkey(Addon):
                 return modifiers, 0x6F + number
         return None
 
-    # --- message loop -----------------------------------------------------
-
-    def _listen(self, ctx, modifiers: int, key: int) -> None:
+    def _listen_windows(self, ctx, modifiers: int, key: int) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -126,6 +154,68 @@ class GlobalHotkey(Addon):
         finally:
             user32.UnregisterHotKey(None, 1)
             self._status = "stopped"
+
+    # --- macOS ------------------------------------------------------------
+
+    def _start_macos(self, ctx) -> None:
+        try:
+            from pynput import keyboard  # noqa: F401
+        except Exception:
+            self._status = "needs pynput — install it with: pip install pynput"
+            return
+
+        combo = self._parse_macos(self._combo)
+        if combo is None:
+            self._status = f"invalid combination '{self._combo}'"
+            return
+
+        self._thread = threading.Thread(
+            target=self._listen_macos, args=(ctx, combo), daemon=True
+        )
+        self._thread.start()
+
+    @staticmethod
+    def _parse_macos(combo: str) -> str | None:
+        """Translate our combo syntax into pynput's GlobalHotKeys format."""
+        names = {
+            "ctrl": "<ctrl>", "control": "<ctrl>",
+            "alt": "<alt>", "option": "<alt>",
+            "shift": "<shift>",
+            "cmd": "<cmd>", "command": "<cmd>", "win": "<cmd>", "super": "<cmd>",
+            "space": "<space>", "enter": "<enter>", "tab": "<tab>",
+            "escape": "<esc>",
+        }
+        parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+        if len(parts) < 2:
+            return None
+
+        out = []
+        for part in parts:
+            if part in names:
+                out.append(names[part])
+            elif len(part) == 1:
+                out.append(part)
+            elif part.startswith("f") and part[1:].isdigit():
+                out.append(f"<{part}>")
+            else:
+                return None
+        return "+".join(out)
+
+    def _listen_macos(self, ctx, combo: str) -> None:
+        from pynput import keyboard
+
+        try:
+            with keyboard.GlobalHotKeys({combo: lambda: self._summon(ctx)}) as listener:
+                self._status = "listening"
+                listener.join()
+        except Exception as exc:
+            # Almost always a denied Accessibility permission.
+            self._status = (
+                f"not permitted ({type(exc).__name__}). Allow JARVIS under "
+                "System Settings > Privacy & Security > Accessibility, then restart."
+            )
+
+    # --- shared -----------------------------------------------------------
 
     @staticmethod
     def _summon(ctx) -> None:

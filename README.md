@@ -1,4 +1,4 @@
-# JARVIS 2.2
+# JARVIS 2.6
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -144,6 +144,40 @@ pip install faster-whisper
 
 Set `JARVIS_STT_PROVIDER=local` to force offline transcription. The model
 (~145 MB for `base`) downloads once on first use.
+
+## macOS
+
+JARVIS runs on macOS with the same features. The `.app` is built by CI on real
+Mac hardware, because PyInstaller cannot cross-compile — a Windows machine
+cannot produce a Mac app.
+
+```bash
+git tag -a v2.6 -m "JARVIS 2.6" && git push origin v2.6
+```
+
+That builds `JARVIS-macos-arm64` (Apple Silicon) and `JARVIS-macos-x86_64`
+(Intel) and attaches both to the release.
+
+**On first launch, right-click the app and choose Open**, then confirm. macOS
+warns about apps it cannot verify, and double-clicking will not get past it.
+This stops entirely once the app is signed and notarised with a paid Apple
+Developer account — see [PUBLISHING-MAC.md](PUBLISHING-MAC.md), which covers
+what that costs and how to set it up.
+
+Differences from Windows:
+
+| | Windows | macOS |
+| --- | --- | --- |
+| Settings, addons, images | beside the EXE | `~/Library/Application Support/JARVIS/` |
+| Speech output | pyttsx3 (SAPI) | the system `say` command |
+| Global hotkey | on by default | off unless you set `JARVIS_HOTKEY` |
+| Updates | replaces itself | downloads, then you drag it to Applications |
+
+The hotkey is off by default on macOS because monitoring keys system-wide needs
+Accessibility permission — the one a keylogger asks for — and a fresh install
+should not be demanding it. Updates are manual there because rewriting anything
+inside a signed `.app` invalidates its signature, after which macOS refuses to
+open it at all.
 
 ## Building the EXE and installer
 

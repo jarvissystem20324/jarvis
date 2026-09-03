@@ -171,13 +171,23 @@ def write_manifest() -> None:
         except ValueError:
             pass
 
+    windows_url = existing.get("url", "https://REPLACE-ME/JARVIS.exe")
+
+    # Keep the flat url/sha256 at the top level: every release published so far
+    # looks like that, and clients already in the wild read only those fields.
+    # New clients prefer the per-platform block, which is what stops a Mac
+    # being handed a .exe.
+    platforms = dict(existing.get("platforms") or {})
+    platforms["windows"] = {"url": windows_url, "sha256": digest}
+
     manifest_path.write_text(
         json.dumps(
             {
                 "version": __version__,
-                "url": existing.get("url", "https://REPLACE-ME/JARVIS.exe"),
+                "url": windows_url,
                 "sha256": digest,
                 "notes": existing.get("notes", f"JARVIS {__version__}"),
+                "platforms": platforms,
             },
             indent=2,
         )
@@ -185,7 +195,10 @@ def write_manifest() -> None:
         encoding="utf-8",
     )
     print(f"Manifest : release/update.json  (v{__version__}, sha256 {digest[:16]}...)")
-    print("           set 'url' and 'notes', then upload update.json + JARVIS.exe")
+    macs = sorted(k for k in platforms if k.startswith("macos"))
+    print(f"           platforms: {', '.join(sorted(platforms))}")
+    if not macs:
+        print("           no macOS build listed yet — see PUBLISHING-MAC.md")
 
 
 if __name__ == "__main__":

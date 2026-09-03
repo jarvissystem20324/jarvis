@@ -31,12 +31,54 @@ from . import net
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import get_base_dir, get_setting
+from .config import IS_MACOS, IS_WINDOWS, get_base_dir, get_setting
 
 USER_AGENT = "JARVIS-Updater"
 CONNECT_TIMEOUT = 20
 OLD_SUFFIX = ".old.exe"
-DOWNLOAD_NAME = "JARVIS.new.exe"
+# macOS ships a zipped .app, Windows a bare executable.
+DOWNLOAD_NAME = "JARVIS-update.zip" if sys.platform == "darwin" else "JARVIS.new.exe"
+
+
+def platform_key() -> str:
+    """Which build this machine needs.
+
+    A Mac must not be handed JARVIS.exe, and an Apple Silicon Mac must not be
+    handed an Intel build, so the manifest carries one entry per target.
+    """
+    if IS_WINDOWS:
+        return "windows"
+    if IS_MACOS:
+        import platform
+
+        return "macos-arm64" if platform.machine() == "arm64" else "macos-x86_64"
+    return "linux"
+
+
+def _entry_for_platform(data: dict) -> tuple[str, str]:
+    """(url, sha256) for this machine, falling back to the flat manifest.
+
+    Older manifests only describe the Windows build at the top level, and
+    releases already in the wild look like that — so keep reading them.
+    """
+    platforms = data.get("platforms")
+    if isinstance(platforms, dict):
+        entry = platforms.get(platform_key())
+        if isinstance(entry, dict):
+            return (
+                str(entry.get("url", "")).strip(),
+                str(entry.get("sha256", "")).strip().lower(),
+            )
+
+    # No entry for this machine. The flat top-level fields describe the Windows
+    # build — every release published so far looks like that — so anything but
+    # Windows must decline rather than download an executable it cannot run.
+    if not IS_WINDOWS:
+        return "", ""
+    return (
+        str(data.get("url", "")).strip(),
+        str(data.get("sha256", "")).strip().lower(),
+    )
 
 
 class UpdateError(RuntimeError):
@@ -111,9 +153,13 @@ def check_for_update(url: str | None = None) -> UpdateInfo | None:
         raise UpdateError("The update manifest is not valid JSON.") from None
 
     version = str(data.get("version", "")).strip()
-    download = str(data.get("url", "")).strip()
-    digest = str(data.get("sha256", "")).strip().lower()
+    download, digest = _entry_for_platform(data)
 
+    if version and not download:
+        raise UpdateError(
+            f"Version {version} is available, but this release has no build "
+            f"for {platform_key()}."
+        )
     if not version or not download:
         raise UpdateError("The update manifest is missing 'version' or 'url'.")
     if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -158,12 +204,42 @@ def download_update(info: UpdateInfo, progress=None) -> Path:
     return target
 
 
+def reveal(path: Path) -> None:
+    """Show a file in Finder or Explorer. Best effort; never raises."""
+    try:
+        if IS_MACOS:
+            subprocess.Popen(["open", "-R", str(path)])
+        elif IS_WINDOWS:
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path.parent)])
+    except Exception:
+        pass
+
+
 def apply_update(downloaded: Path, relaunch: bool = True) -> None:
-    """Swap the new EXE in and restart. Does not return if relaunch succeeds."""
+    """Swap the new build in and restart. Does not return if relaunch succeeds."""
     if not getattr(sys, "frozen", False):
         raise UpdateError(
             "Updates only apply to the packaged app. Running from source — "
             "use git or rebuild instead."
+        )
+
+    if IS_MACOS:
+        # Deliberately not automatic. A macOS app is a signed directory, and
+        # rewriting anything inside it invalidates the signature — after which
+        # Gatekeeper refuses to open the app at all, leaving the user worse off
+        # than before the update. Replacing the whole bundle while it is
+        # running is its own hazard. So verify the download, hand it over, and
+        # let the user drop it into Applications.
+        reveal(downloaded)
+        raise UpdateError(
+            f"JARVIS {downloaded.name} has been downloaded and its checksum "
+            "verified.\n\n"
+            "On macOS the app replaces itself by hand: quit JARVIS, unzip the "
+            "download, and drag the new JARVIS into Applications, replacing "
+            "the old one. Your settings, addons and images are kept — they "
+            "live in Application Support, not inside the app."
         )
 
     live = Path(sys.executable).resolve()

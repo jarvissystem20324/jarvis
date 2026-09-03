@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import get_addons_dir, get_data_dir
+from .config import get_addons_dir, get_bundled_dir, get_data_dir
 
 
 # Commands an addon may never claim. /run and /open in particular enforce a
@@ -152,10 +152,7 @@ class AddonManager:
         """
         if not getattr(sys, "frozen", False):
             return
-        bundle = getattr(sys, "_MEIPASS", "")
-        if not bundle:
-            return
-        source = Path(bundle) / "addons"
+        source = get_bundled_dir() / "addons"
         if not source.is_dir():
             return
 

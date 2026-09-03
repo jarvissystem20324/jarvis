@@ -5,7 +5,12 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 # The built-in addons ride along as data and are copied out beside the EXE on
 # first run, so users can read and edit them like any other addon.
-datas = [("assets/jarvis.ico", "assets"), ("addons", "addons")]
+datas = [
+    ("assets/jarvis.ico", "assets"),
+    ("addons", "addons"),
+    # Seeds a starter .env on first run where no installer wrote one.
+    (".env.example", "."),
+]
 binaries = []
 hiddenimports = [
     "PIL._tkinter_finder",
