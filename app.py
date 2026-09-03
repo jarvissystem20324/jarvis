@@ -12,7 +12,7 @@ def selftest() -> int:
     A windowed build has no console, so this is the only way to diagnose a
     broken install (missing audio DLLs, bad key, etc.).
     """
-    from jarvis.config import get_base_dir, load_config
+    from jarvis.config import IS_MACOS, get_base_dir, load_config
 
     load_config()
     from jarvis import __version__
@@ -25,16 +25,40 @@ def selftest() -> int:
         except Exception as exc:
             lines.append(f"[FAIL] {label}: {type(exc).__name__}: {exc}")
 
+    def warn(label: str, fn) -> None:
+        """Report something JARVIS can run without.
+
+        Kept distinct from check() because the build gate fails on [FAIL].
+        A machine with no sound card is a fact about the machine, not a broken
+        build, and a CI runner has no audio at all.
+        """
+        try:
+            lines.append(f"[ OK ] {label}: {fn()}")
+        except Exception as exc:
+            lines.append(f"[WARN] {label}: unavailable ({type(exc).__name__})")
+
     check("frozen", lambda: getattr(sys, "frozen", False))
     check("base dir", lambda: get_base_dir())
 
     import jarvis.voice as v
 
     lines.append(f"[{' OK ' if v._HAS_AUDIO else 'FAIL'}] sounddevice/numpy loaded: {v._HAS_AUDIO}")
-    lines.append(f"[{' OK ' if v._HAS_PYTTSX3 else 'FAIL'}] pyttsx3 loaded: {v._HAS_PYTTSX3}")
 
-    check("audio output devices", lambda: _count_devices(output=True))
-    check("audio input devices", lambda: _count_devices(output=False))
+    # Speech output differs by platform: Windows drives pyttsx3/SAPI, macOS the
+    # built-in `say`. pyttsx3 is deliberately excluded from the Mac build, so
+    # reporting its absence there as a failure would fail a healthy build.
+    if IS_MACOS:
+        import shutil as _shutil
+
+        speaks = bool(_shutil.which("say"))
+        lines.append(f"[{' OK ' if speaks else 'FAIL'}] macOS speech (say): {speaks}")
+    else:
+        lines.append(
+            f"[{' OK ' if v._HAS_PYTTSX3 else 'FAIL'}] pyttsx3 loaded: {v._HAS_PYTTSX3}"
+        )
+
+    warn("audio output devices", lambda: _count_devices(output=True))
+    warn("audio input devices", lambda: _count_devices(output=False))
     check("customtkinter", lambda: __import__("customtkinter").__version__)
     check("openai sdk", lambda: __import__("openai").__version__)
 
