@@ -100,11 +100,20 @@ def selftest() -> int:
         A missing certificate store only shows up on other people's machines,
         so make one real request rather than trusting that it works.
         """
+        import urllib.error
+
         from jarvis import net
 
         source = "certifi bundle" if net.using_certifi() else "OS certificate store"
-        with net.urlopen("https://api.github.com/", timeout=20) as response:
-            code = response.status
+        try:
+            with net.urlopen("https://example.com/", timeout=20) as response:
+                code = response.status
+        except urllib.error.HTTPError as exc:
+            # The handshake completed and the certificate verified — that is
+            # the whole point of this check. What the server then chose to
+            # answer (403, 404, a rate limit) is not a TLS problem, and failing
+            # the build on it once rejected a perfectly good macOS build.
+            code = exc.code
         return f"verified via {source} (HTTP {code})"
 
     check("https/TLS", _tls)
