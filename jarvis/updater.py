@@ -257,11 +257,34 @@ def apply_update(downloaded: Path, relaunch: bool = True) -> None:
     try:
         downloaded.replace(live)
     except OSError as exc:
-        retired.rename(live)  # put things back the way they were
+        # The rollback can fail too — antivirus holding the handle is the
+        # usual cause, and it is exactly the case where the original code left
+        # nothing at all at JARVIS.exe while raising a raw OSError the UI did
+        # not catch. Losing the app outright is far worse than a failed
+        # update, so say precisely how to get it back.
+        try:
+            retired.rename(live)
+        except OSError:
+            raise UpdateError(
+                f"The update could not be installed ({exc}), and the previous "
+                "version could not be restored automatically.\n\n"
+                "Nothing has been lost — your app is still there under another "
+                "name. To put it back, open this folder:\n"
+                f"  {live.parent}\n"
+                f"and rename '{retired.name}' to '{live.name}'."
+            ) from None
         raise UpdateError(f"Could not install the update: {exc}") from None
 
     if relaunch:
-        subprocess.Popen([str(live)], cwd=str(live.parent), close_fds=True)
+        try:
+            subprocess.Popen([str(live)], cwd=str(live.parent), close_fds=True)
+        except OSError as exc:
+            # The update is already on disk, so this is recoverable — but the
+            # dialog would otherwise sit on "Restarting..." for ever.
+            raise UpdateError(
+                f"The update installed, but JARVIS could not restart itself "
+                f"({exc}). Close JARVIS and open it again to finish."
+            ) from None
         os._exit(0)
 
 

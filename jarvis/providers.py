@@ -67,7 +67,9 @@ GROQ = Provider(
     label="Groq",
     base_url="https://api.groq.com/openai/v1",
     key_env="GROQ_API_KEY",
-    chat_model="llama-3.3-70b-versatile",
+    # Groq retired the llama-3.3 models, which left this 404ing for every
+    # user. Ids here are namespaced and must be passed whole.
+    chat_model="openai/gpt-oss-120b",
     stt_model="whisper-large-v3-turbo",
     free=True,
     signup="https://console.groq.com/keys",
@@ -225,8 +227,15 @@ def list_models(provider: Provider, limit: int = 40) -> list[str]:
     names = []
     for item in getattr(response, "data", []) or []:
         name = getattr(item, "id", "")
-        if name:
-            names.append(name.split("/")[-1])
+        if not name:
+            continue
+        # Only Gemini's "models/" wrapper is noise. Groq genuinely namespaces
+        # its ids ("openai/gpt-oss-120b"), and stripping that produced names
+        # that 404 — so this list, which is shown to the user when a model is
+        # missing, was handing out ids that could not work.
+        if name.startswith("models/"):
+            name = name[len("models/"):]
+        names.append(name)
     return sorted(set(names))[:limit]
 
 

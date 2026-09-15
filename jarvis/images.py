@@ -81,9 +81,26 @@ class ImageGenerator:
         else:
             data = self._generate_pollinations(prompt, size)
 
-        path = get_output_dir() / self._filename(prompt, data)
+        path = self._free_path(get_output_dir() / self._filename(prompt, data))
         path.write_bytes(data)
         return path
+
+    @staticmethod
+    def _free_path(path: Path) -> Path:
+        """Never overwrite an existing image.
+
+        The name carries a one-second timestamp, so generating the same prompt
+        twice inside the same second produced the same filename and the second
+        image silently replaced the first.
+        """
+        if not path.exists():
+            return path
+        stem, suffix = path.stem, path.suffix
+        for counter in range(2, 1000):
+            candidate = path.with_name(f"{stem}-{counter}{suffix}")
+            if not candidate.exists():
+                return candidate
+        return path.with_name(f"{stem}-{datetime.now():%f}{suffix}")
 
     @staticmethod
     def _use_openai() -> bool:

@@ -274,6 +274,48 @@ def run_selftest(exe: Path) -> tuple[bool, str]:
     return result.returncode == 0 and "[FAIL]" not in report, report
 
 
+def looks_like_our_install(path: Path | None) -> bool:
+    """Gate every recursive delete on the uninstall path.
+
+    InstallLocation comes out of the registry, and nothing guarantees it is
+    sane. An empty or missing value becomes Path('.'), which exists, resolves
+    to whatever directory the uninstaller happens to be running from, and was
+    then handed straight to `rmdir /s /q`. A stray 'C:\\' would pass just as
+    easily. Refuse anything that is not recognisably our own install folder.
+    """
+    if path is None:
+        return False
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+
+    if not resolved.is_dir():
+        return False
+    if resolved.parent == resolved:          # a drive root such as C:\
+        return False
+
+    protected = set()
+    try:
+        protected.add(Path.home().resolve())
+    except OSError:
+        pass
+    for var in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles",
+                "ProgramFiles(x86)", "SystemRoot", "windir", "PUBLIC"):
+        value = os.getenv(var)
+        if not value:
+            continue
+        try:
+            protected.add(Path(value).resolve())
+        except OSError:
+            pass
+    if resolved in protected:
+        return False
+
+    # Finally: it has to actually contain what we put there.
+    return (resolved / EXE_NAME).exists() or (resolved / UNINSTALLER_NAME).exists()
+
+
 def do_uninstall(log) -> bool:
     install_dir = read_install_location()
     log("Stopping JARVIS...")
@@ -292,7 +334,13 @@ def do_uninstall(log) -> bool:
     unregister_uninstaller()
     log("Removed Add or Remove Programs entry.")
 
-    if install_dir and install_dir.exists():
+    if install_dir and install_dir.exists() and not looks_like_our_install(install_dir):
+        log(
+            f"Refusing to delete '{install_dir}' — it does not look like a "
+            "JARVIS installation. Remove it by hand if you are sure.",
+            warn=True,
+        )
+    elif install_dir and install_dir.exists():
         running_from = Path(sys.executable).resolve().parent
         if running_frozen() and running_from == install_dir.resolve():
             # Can't delete our own directory while running from it — hand the

@@ -601,6 +601,12 @@ class JarvisApp(ctk.CTk):
             except updater.UpdateError as exc:
                 message = str(exc)
                 safe_after(self, lambda: self._on_update_result(None, message, silent))
+            except Exception as exc:
+                # Anything unexpected would otherwise vanish into a daemon
+                # thread, leaving the button stuck on "Checking..." for ever.
+                traceback.print_exc()
+                message = f"Update check failed: {type(exc).__name__}: {exc}"
+                safe_after(self, lambda: self._on_update_result(None, message, silent))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -712,6 +718,13 @@ class UpdateDialog(ctk.CTkToplevel):
                 updater.apply_update(path)  # replaces the EXE and relaunches
             except updater.UpdateError as exc:
                 message = str(exc)
+                safe_after(self, lambda: self._failed(message))
+            except Exception as exc:
+                # A swap that fails in an unforeseen way must still be shown.
+                # Silently dying here leaves the dialog on "Restarting..."
+                # while the app may have been renamed aside on disk.
+                traceback.print_exc()
+                message = f"Update failed: {type(exc).__name__}: {exc}"
                 safe_after(self, lambda: self._failed(message))
 
         threading.Thread(target=work, daemon=True).start()
