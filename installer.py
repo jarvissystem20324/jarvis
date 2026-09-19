@@ -53,6 +53,26 @@ APP_VERSION = _app_version()
 PUBLISHER = "JARVIS"
 EXE_NAME = "JARVIS.exe"
 UNINSTALLER_NAME = "uninstall.exe"
+
+# One key is a single point of failure: a rate limit, an empty balance or a
+# retired model leaves JARVIS with nowhere to go. Two is the smallest number
+# that survives any one provider having a bad day.
+MINIMUM_KEYS = 2
+
+# (env var, label, placeholder). Free providers first.
+PROVIDER_FIELDS = (
+    ("GEMINI_API_KEY", "Google Gemini  (free)", "AIza... or AQ..."),
+    ("GROQ_API_KEY", "Groq  (free)", "gsk_..."),
+    ("NVIDIA_API_KEY", "NVIDIA NIM  (free)", "nvapi-..."),
+    ("OPENAI_API_KEY", "OpenAI  (paid)", "sk-..."),
+)
+
+# Only checked to warn about an obvious paste error, never to block.
+KEY_PREFIXES = {
+    "GROQ_API_KEY": "gsk_",
+    "NVIDIA_API_KEY": "nvapi-",
+    "OPENAI_API_KEY": "sk-",
+}
 REG_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"
 
 # Where installed copies look for updates. Set this to your manifest URL before
@@ -168,7 +188,7 @@ def read_install_location() -> Path | None:
 
 def do_install(
     install_dir: Path,
-    api_key: str,
+    api_keys: dict[str, str],
     desktop_shortcut: bool,
     menu_shortcut: bool,
     log,
@@ -195,17 +215,26 @@ def do_install(
 
     log("Writing configuration...")
     env_path = install_dir / ".env"
-    key_line = api_key.strip() or "sk-put-your-key-here"
+    supplied = sum(1 for v in api_keys.values() if v.strip())
+    log(f"Configured {supplied} provider key{'s' if supplied != 1 else ''}.")
     env_path.write_text(
         "\n".join(
             [
-                f"OPENAI_API_KEY={key_line}",
-                "JARVIS_MODEL=gpt-5.4-mini",
-                "JARVIS_IMAGE_MODEL=gpt-image-2",
-                "JARVIS_TTS_MODEL=gpt-4o-mini-tts",
-                "JARVIS_STT_MODEL=gpt-4o-mini-transcribe",
-                "JARVIS_TTS_VOICE=onyx",
+                "# Providers. JARVIS tries them in order and moves on when one",
+                "# fails, so more than one key means a dead key never stops it.",
+                f"GEMINI_API_KEY={api_keys.get('GEMINI_API_KEY', '').strip()}",
+                f"GROQ_API_KEY={api_keys.get('GROQ_API_KEY', '').strip()}",
+                f"NVIDIA_API_KEY={api_keys.get('NVIDIA_API_KEY', '').strip()}",
+                f"OPENAI_API_KEY={api_keys.get('OPENAI_API_KEY', '').strip()}",
+                "",
+                "JARVIS_PROVIDER=auto",
+                "# 'auto' means free: an OpenAI key on file is not consent to",
+                "# bill it for every image.",
+                "JARVIS_IMAGE_PROVIDER=auto",
+                "JARVIS_STT_PROVIDER=auto",
+                "",
                 "JARVIS_VOICE=false",
+                "JARVIS_HOTKEY=ctrl+alt+j",
                 f"JARVIS_UPDATE_URL={UPDATE_URL}",
             ]
         )
@@ -469,22 +498,46 @@ class InstallerApp(ctk.CTk):
         )
 
         ctk.CTkLabel(
-            body, text="OpenAI API key", text_color=COLORS["text"], anchor="w"
+            body,
+            text="API keys — enter at least two",
+            text_color=COLORS["text"],
+            anchor="w",
         ).pack(fill="x")
-        self.key_entry = ctk.CTkEntry(
-            body, height=36, show="•", placeholder_text="sk-..."
-        )
-        self.key_entry.pack(fill="x", pady=(4, 2))
         ctk.CTkLabel(
             body,
-            text="Stored only on this PC, in .env next to the app. "
-            "You can leave this blank and fill it in later.",
+            text="JARVIS moves to the next provider when one is rate limited, "
+            "out of credit or retires a model. Two keys is what keeps it "
+            "working when that happens. The first three are free.",
             font=ctk.CTkFont(size=11),
             text_color=COLORS["muted"],
             anchor="w",
             wraplength=540,
             justify="left",
-        ).pack(fill="x", pady=(0, 10))
+        ).pack(fill="x", pady=(2, 6))
+
+        self.key_entries: dict[str, ctk.CTkEntry] = {}
+        for env_name, label, hint in PROVIDER_FIELDS:
+            row = ctk.CTkFrame(body, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            ctk.CTkLabel(
+                row, text=label, width=150, anchor="w",
+                text_color=COLORS["muted"], font=ctk.CTkFont(size=11),
+            ).pack(side="left")
+            entry = ctk.CTkEntry(row, height=32, show="•", placeholder_text=hint)
+            entry.pack(side="left", fill="x", expand=True)
+            entry.bind("<KeyRelease>", lambda _e: self._refresh_key_count())
+            self.key_entries[env_name] = entry
+
+        self.key_status = ctk.CTkLabel(
+            body,
+            text="",
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+            wraplength=540,
+            justify="left",
+        )
+        self.key_status.pack(fill="x", pady=(4, 10))
+        self._refresh_key_count()
 
         self.desktop_var = ctk.BooleanVar(value=True)
         self.menu_var = ctk.BooleanVar(value=True)
@@ -533,6 +586,26 @@ class InstallerApp(ctk.CTk):
 
         self.after(0, write)
 
+    def _refresh_key_count(self) -> None:
+        """Show how close the user is to the two-key minimum as they type."""
+        filled = sum(1 for e in self.key_entries.values() if e.get().strip())
+        if filled >= MINIMUM_KEYS:
+            self.key_status.configure(
+                text=f"✓  {filled} keys entered — JARVIS can fall back between them.",
+                text_color=COLORS.get("ok", COLORS["muted"]),
+            )
+        else:
+            need = MINIMUM_KEYS - filled
+            self.key_status.configure(
+                text=f"{filled} of {MINIMUM_KEYS} entered — {need} more needed.",
+                text_color=COLORS["muted"],
+            )
+
+    def _reset_buttons(self) -> None:
+        """Re-enable the form after a validation failure."""
+        self.action_btn.configure(state="normal")
+        self.close_btn.configure(state="normal", text="Cancel")
+
     def _start(self) -> None:
         self.action_btn.configure(state="disabled")
         self.close_btn.configure(state="disabled", text="Please wait")
@@ -541,13 +614,32 @@ class InstallerApp(ctk.CTk):
             worker = lambda: self._run(do_uninstall, self.log)  # noqa: E731
         else:
             install_dir = Path(self.dir_entry.get().strip() or DEFAULT_DIR)
-            key = self.key_entry.get().strip()
-            if key and not key.startswith("sk-"):
-                self.log("That does not look like an OpenAI key (should start with 'sk-').", warn=True)
+            keys = {name: entry.get().strip() for name, entry in self.key_entries.items()}
+            provided = [n for n, v in keys.items() if v]
+
+            if len(provided) < MINIMUM_KEYS:
+                self.log(
+                    f"Please enter at least {MINIMUM_KEYS} API keys — you have "
+                    f"{len(provided)}. One key is a single point of failure: when "
+                    "it hits a rate limit or a model is retired, JARVIS has "
+                    "nothing to fall back on.",
+                    error=True,
+                )
+                self._reset_buttons()
+                return
+
+            for name, value in keys.items():
+                expected = KEY_PREFIXES.get(name)
+                if value and expected and not value.startswith(expected):
+                    self.log(
+                        f"{name} does not start with '{expected}' — double-check it.",
+                        warn=True,
+                    )
+
             worker = lambda: self._run(  # noqa: E731
                 do_install,
                 install_dir,
-                key,
+                keys,
                 self.desktop_var.get(),
                 self.menu_var.get(),
                 self.log,

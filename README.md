@@ -1,4 +1,4 @@
-# JARVIS 2.6
+# JARVIS 2.7
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -15,12 +15,13 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Then put **one** free key in `.env`:
+Then put **at least two** keys in `.env` — providers rate limit, run out of credit and retire models without warning, and a second key is what keeps JARVIS answering when one of those happens:
 
 | Provider | Get a key | Free? |
 | --- | --- | --- |
 | Google Gemini | <https://aistudio.google.com/apikey> | Yes — best quality, sees images |
 | Groq | <https://console.groq.com/keys> | Yes — fastest, also does speech-to-text |
+| NVIDIA NIM | <https://build.nvidia.com> | Yes — fast, but most of its models time out |
 
 ```bash
 python app.py
@@ -42,7 +43,7 @@ python main.py
 | **Speech in** | Groq Whisper, or local faster-whisper | A free key, or nothing if local |
 
 Set `JARVIS_PROVIDER` to pin one backend, or leave it `auto` to try each in
-turn — Gemini, then Groq, then OpenAI. A key that gets rejected or runs out of
+turn — Gemini, Groq, NVIDIA, then OpenAI. A key that gets rejected or runs out of
 credit is dropped for the session and the next provider takes over, so one dead
 key doesn't take the app down.
 

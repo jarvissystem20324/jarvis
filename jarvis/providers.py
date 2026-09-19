@@ -89,6 +89,21 @@ OPENAI = Provider(
     notes="Paid. Highest quality, needs credit on the account.",
 )
 
+NVIDIA = Provider(
+    name="nvidia",
+    label="NVIDIA NIM",
+    base_url="https://integrate.api.nvidia.com/v1",
+    key_env="NVIDIA_API_KEY",
+    # Most models NVIDIA lists never answer on the free tier — kimi-k3,
+    # deepseek-v4-flash, glm-5.3 and gemma-4 were all still silent after 200
+    # seconds. This one replies in about two seconds and keeps its
+    # chain-of-thought in a separate field instead of the reply.
+    chat_model="nvidia/nemotron-3-super-120b-a12b",
+    free=True,
+    signup="https://build.nvidia.com",
+    notes="Free tier, fast. Most other NIM models time out.",
+)
+
 POLLINATIONS = Provider(
     name="pollinations",
     label="Pollinations",
@@ -101,14 +116,14 @@ POLLINATIONS = Provider(
 )
 
 # Every provider JARVIS knows how to talk to.
-CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, OPENAI, POLLINATIONS)
+CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, NVIDIA, OPENAI, POLLINATIONS)
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
 # keyless text tier answers 402 to anything longer than a trivial prompt, so
 # leaving it in the chain would burn a request and confuse the error every
 # time. It still works for images, and `JARVIS_PROVIDER=pollinations` will
 # still pin it for anyone who wants it.
-AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, OPENAI)
+AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, NVIDIA, OPENAI)
 
 STT_PROVIDERS: tuple[Provider, ...] = (GROQ, OPENAI)
 
