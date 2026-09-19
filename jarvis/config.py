@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 # --- Model defaults -------------------------------------------------------
 # Override any of these in .env without touching the code.
-DEFAULT_CHAT_MODEL = "gpt-5.4-mini"
+DEFAULT_CHAT_MODEL = "gpt-5-mini"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
