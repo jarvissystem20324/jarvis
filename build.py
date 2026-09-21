@@ -142,7 +142,24 @@ def verify_build(exe: Path) -> bool:
                 print("  " + line)
         return False
 
-    print(f"OK: {text.splitlines()[0]}")
+    # The EXE must be the version we are about to advertise. PyInstaller
+    # cannot overwrite a running executable — it dies with a PermissionError —
+    # and without this check the build carried on and stamped the new version
+    # onto the old binary. Users would then download "2.9.1", get 2.9, and be
+    # offered the same update for ever.
+    sys.path.insert(0, str(ROOT))
+    from jarvis import __version__
+
+    first = text.splitlines()[0]
+    if f"JARVIS {__version__} " not in first:
+        print(f"FAILED: source says {__version__}, but the packaged app reports:")
+        print(f"  {first}")
+        print("The EXE was not rebuilt — usually because JARVIS was still")
+        print("running and Windows would not let PyInstaller replace it.")
+        print("Close JARVIS and build again.")
+        return False
+
+    print(f"OK: {first}")
     return True
 
 
