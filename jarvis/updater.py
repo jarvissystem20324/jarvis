@@ -119,8 +119,30 @@ def is_newer(candidate: str, current: str) -> bool:
 
 
 def _require_https(url: str, what: str) -> None:
-    if not url.lower().startswith("https://"):
-        raise UpdateError(f"{what} must use https (refusing {url[:60]}).")
+    if url.lower().startswith("https://"):
+        return
+
+    # Point at the actual mistake. Truncating the value made a typo look like
+    # a working https link being refused for no reason: a .env reading
+    # "JARVIS_UPDATE_URL=update https://github.com/..." got cut at 60
+    # characters, so the message read "must use https (refusing
+    # https://github.com/...)" — which is nonsense from the user's side.
+    marker = url.lower().find("https://")
+    if marker > 0:
+        junk = url[:marker]
+        raise UpdateError(
+            f"{what} has extra text before the address.\n\n"
+            f"Remove {junk.strip()!r} from the start of the line, leaving:\n"
+            f"  {url[marker:]}"
+        )
+    if url.lower().startswith("http://"):
+        raise UpdateError(
+            f"{what} uses http, which can be tampered with in transit. "
+            f"Change it to https:\n  {'https://' + url[7:]}"
+        )
+    raise UpdateError(
+        f"{what} must be a full https address.\n\nGot: {url[:120]!r}"
+    )
 
 
 def check_for_update(url: str | None = None) -> UpdateInfo | None:
