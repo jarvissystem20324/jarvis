@@ -68,6 +68,10 @@ MID = Mode(
     ),
     max_tokens=1536,
     temperature=0.7,
+    # Mercury is a diffusion model and answers in about a second, which is
+    # what you want from the tier you sit in all day. Still only a preference:
+    # if the key is missing or the model is retired, the chain takes over.
+    targets=(("inception", "mercury-2.5"),),
     accent="#00d4ff",
 )
 

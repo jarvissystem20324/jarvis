@@ -1,4 +1,4 @@
-# JARVIS 2.7
+# JARVIS 2.9
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -21,6 +21,7 @@ Then put **at least two** keys in `.env` — providers rate limit, run out of cr
 | --- | --- | --- |
 | Google Gemini | <https://aistudio.google.com/apikey> | Yes — best quality, sees images |
 | Groq | <https://console.groq.com/keys> | Yes — fastest, also does speech-to-text |
+| Inception Mercury | <https://platform.inceptionlabs.ai> | Yes — 100M free tokens, ~1s replies |
 | NVIDIA NIM | <https://build.nvidia.com> | Yes — fast, but most of its models time out |
 
 ```bash

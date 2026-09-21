@@ -89,6 +89,20 @@ OPENAI = Provider(
     notes="Paid. Highest quality, needs credit on the account.",
 )
 
+INCEPTION = Provider(
+    name="inception",
+    label="Inception Mercury",
+    base_url="https://api.inceptionlabs.ai/v1",
+    key_env="INCEPTION_API_KEY",
+    # Mercury is a diffusion language model rather than an autoregressive one,
+    # which is why it answers in about a second. mercury and mercury-coder
+    # exist but are paid-tier only; the free tier serves this.
+    chat_model="mercury-2.5",
+    free=True,
+    signup="https://platform.inceptionlabs.ai",
+    notes="Free tier, 100M tokens, ~1s replies. Powers Mid mode.",
+)
+
 NVIDIA = Provider(
     name="nvidia",
     label="NVIDIA NIM",
@@ -116,14 +130,16 @@ POLLINATIONS = Provider(
 )
 
 # Every provider JARVIS knows how to talk to.
-CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, NVIDIA, OPENAI, POLLINATIONS)
+CHAT_PROVIDERS: tuple[Provider, ...] = (
+    GEMINI, GROQ, INCEPTION, NVIDIA, OPENAI, POLLINATIONS,
+)
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
 # keyless text tier answers 402 to anything longer than a trivial prompt, so
 # leaving it in the chain would burn a request and confuse the error every
 # time. It still works for images, and `JARVIS_PROVIDER=pollinations` will
 # still pin it for anyone who wants it.
-AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, NVIDIA, OPENAI)
+AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, INCEPTION, NVIDIA, OPENAI)
 
 STT_PROVIDERS: tuple[Provider, ...] = (GROQ, OPENAI)
 
