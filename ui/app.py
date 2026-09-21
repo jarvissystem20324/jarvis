@@ -13,7 +13,7 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont
 
-from jarvis import __version__
+from jarvis import __version__, modes
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
@@ -31,6 +31,9 @@ COLORS = {
     "user_bubble": "#1e3a5f",
     "jarvis_bubble": "#1a2332",
     "error": "#f87171",
+    "muted": "#64748b",
+    "ok": "#4ade80",
+    "code_bg": "#0d1524",
 }
 
 PREVIEW_MAX = 420
@@ -83,6 +86,8 @@ class JarvisApp(ctk.CTk):
         self._busy = False
 
         self._build_layout()
+        self.refresh_mode()
+        self.refresh_code_mode()
         self._show_tab("chat")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -156,6 +161,65 @@ class JarvisApp(ctk.CTk):
             command=lambda: self._show_tab("image"),
         )
         self.image_tab_btn.pack(fill="x", padx=16, pady=4)
+
+        self.code_tab_btn = ctk.CTkButton(
+            sidebar,
+            text="⌨  Code",
+            anchor="w",
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["accent_dim"],
+            command=lambda: self._show_tab("code"),
+        )
+        self.code_tab_btn.pack(fill="x", padx=16, pady=4)
+
+        # --- thinking mode ------------------------------------------------
+        ctk.CTkFrame(sidebar, height=1, fg_color=COLORS["accent_dim"]).pack(
+            fill="x", padx=16, pady=(12, 8)
+        )
+        ctk.CTkLabel(
+            sidebar,
+            text="THINKING MODE",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=COLORS["muted"],
+            anchor="w",
+        ).pack(fill="x", padx=18)
+
+        self.mode_btn = ctk.CTkButton(
+            sidebar,
+            text="",
+            anchor="w",
+            height=42,
+            fg_color=COLORS["bg"],
+            hover_color=COLORS["accent_dim"],
+            command=self._cycle_mode,
+        )
+        self.mode_btn.pack(fill="x", padx=16, pady=(4, 2))
+
+        self.mode_blurb = ctk.CTkLabel(
+            sidebar,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color=COLORS["muted"],
+            anchor="w",
+            wraplength=186,
+            justify="left",
+        )
+        self.mode_blurb.pack(fill="x", padx=18, pady=(0, 6))
+
+        # Five pips showing where this mode sits on the scale.
+        self.mode_pips = ctk.CTkFrame(sidebar, fg_color="transparent", height=6)
+        self.mode_pips.pack(fill="x", padx=18, pady=(0, 10))
+        self._pip_widgets = []
+        for _ in modes.ALL:
+            pip = ctk.CTkFrame(self.mode_pips, height=4, width=30,
+                               fg_color=COLORS["panel"], corner_radius=2)
+            pip.pack(side="left", padx=2)
+            self._pip_widgets.append(pip)
+
+        ctk.CTkFrame(sidebar, height=1, fg_color=COLORS["accent_dim"]).pack(
+            fill="x", padx=16, pady=(2, 10)
+        )
 
         self.voice_btn = ctk.CTkButton(
             sidebar,
@@ -377,14 +441,69 @@ class JarvisApp(ctk.CTk):
         self.chat_frame.grid_forget()
         self.image_frame.grid_forget()
 
-        if tab == "chat":
-            self.chat_frame.grid(row=0, column=0, sticky="nsew")
-            self.chat_tab_btn.configure(fg_color=COLORS["accent_dim"])
-            self.image_tab_btn.configure(fg_color="transparent")
-        else:
+        buttons = {
+            "chat": self.chat_tab_btn,
+            "image": self.image_tab_btn,
+            "code": self.code_tab_btn,
+        }
+        for name, button in buttons.items():
+            button.configure(
+                fg_color=COLORS["accent_dim"] if name == tab else "transparent"
+            )
+
+        # Code shares the chat transcript — it is the same conversation with a
+        # different persona, so splitting the history would only lose context.
+        if tab == "image":
             self.image_frame.grid(row=0, column=0, sticky="nsew")
-            self.image_tab_btn.configure(fg_color=COLORS["accent_dim"])
-            self.chat_tab_btn.configure(fg_color="transparent")
+        else:
+            self.chat_frame.grid(row=0, column=0, sticky="nsew")
+
+        if tab == "code" and not self.jarvis.brain.code_mode:
+            self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
+        elif tab == "chat" and self.jarvis.brain.code_mode:
+            self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
+        self.refresh_code_mode()
+
+    # --- modes ------------------------------------------------------------
+
+    def _cycle_mode(self) -> None:
+        """Click to step Low -> Mid -> High -> Max -> Hyperdrive -> Low."""
+        nxt = modes.next_mode(self.jarvis.brain.mode.name)
+        self.jarvis.brain.set_mode(nxt.name)
+        self.refresh_mode()
+        if nxt.name == "hyperdrive":
+            self._append_message(
+                "JARVIS",
+                "Hyperdrive engaged. I'll reach for kimi-k3 first and wait up "
+                "to 200 seconds; if it stays quiet I drop back to Max rather "
+                "than leave you hanging.",
+                is_user=False,
+            )
+
+    def refresh_mode(self) -> None:
+        mode = self.jarvis.brain.mode
+        try:
+            self.mode_btn.configure(text=f"⚡  {mode.label}", text_color=mode.accent)
+            self.mode_blurb.configure(text=mode.blurb)
+            active = [m.name for m in modes.ALL].index(mode.name)
+            for i, pip in enumerate(self._pip_widgets):
+                pip.configure(fg_color=mode.accent if i <= active else COLORS["panel"])
+        except Exception:
+            pass
+
+    def refresh_code_mode(self) -> None:
+        """Keep the sidebar honest when /code is typed instead of clicked."""
+        try:
+            on = self.jarvis.brain.code_mode
+            self.code_tab_btn.configure(
+                text="⌨  Code  ●" if on else "⌨  Code",
+                fg_color=COLORS["accent_dim"] if on else (
+                    COLORS["accent_dim"] if self.active_tab == "code" else "transparent"
+                ),
+            )
+            self.title(f"JARVIS {__version__}{'  —  code mode' if on else ''}")
+        except Exception:
+            pass
 
     # --- chat -------------------------------------------------------------
 
@@ -462,6 +581,7 @@ class JarvisApp(ctk.CTk):
     def _handle_response(self, response: JarvisResponse) -> None:
         self._set_busy(False)
         self._refresh_provider()
+        self.refresh_code_mode()
         self._append_message("JARVIS", response.text, is_user=False)
         if response.image_path:
             self.current_image = response.image_path

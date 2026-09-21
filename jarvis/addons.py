@@ -45,6 +45,7 @@ from .config import get_addons_dir, get_bundled_dir, get_data_dir
 RESERVED_COMMANDS = frozenset({
     "quit", "exit", "clear", "voice", "image", "addons",
     "help", "run", "open", "search", "time", "date", "system",
+    "mode", "code",
 })
 
 

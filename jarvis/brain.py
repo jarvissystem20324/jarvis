@@ -19,8 +19,8 @@ from openai import (
     RateLimitError,
 )
 
-from . import providers
-from .personality import JARVIS_SYSTEM_PROMPT
+from . import modes, providers
+from .personality import CODE_MODE_PROMPT, JARVIS_IDENTITY, JARVIS_SYSTEM_PROMPT
 from .providers import Provider
 
 # Conversation turns (user + assistant messages) kept in context. The system
@@ -42,6 +42,10 @@ class Brain:
         self.history: list[dict[str, str]] = []
         self._model_override = model
         self._active: Provider | None = None
+        self.mode = modes.DEFAULT
+        # Set by code mode; replaces the butler persona entirely.
+        self.persona_override: str | None = None
+        self.code_mode = False
         # Providers that failed in a way retrying won't fix (bad key, no
         # credit). Skipped for the rest of the session.
         self._dead: set[str] = set()
@@ -66,9 +70,68 @@ class Brain:
 
     def active_label(self) -> str:
         """Which backend is answering — shown in the UI status line."""
+        suffix = f" · {self.mode.label}" + (" · Code" if self.code_mode else "")
         if not self._active:
-            return "not connected"
-        return f"{self._active.label} · {self._model_override or providers.model_for(self._active)}"
+            return "not connected" + suffix
+        model = self._last_model or self._model_override or providers.model_for(self._active)
+        return f"{self._active.label} · {model}{suffix}"
+
+    def system_prompt(self) -> str:
+        """Persona plus the active mode's thinking style."""
+        base = self.persona_override or JARVIS_SYSTEM_PROMPT
+        return base + "\n\n" + self.mode.style
+
+    def set_mode(self, name: str):
+        """Switch thinking mode. Clears cooldowns so the new mode gets a clean go."""
+        self.mode = modes.get(name)
+        self._cooldown.clear()
+        return self.mode
+
+    # Models trained to be agreeable open with an acknowledgement even when the
+    # system prompt forbids it by name — gpt-oss-120b still said "Certainly."
+    # every time. Prompting is unreliable here, so code mode trims it.
+    _PLEASANTRIES = (
+        "certainly", "sure", "of course", "absolutely", "great question",
+        "happy to help", "i'd be happy to", "here you go", "no problem",
+    )
+
+    @classmethod
+    def _strip_pleasantry(cls, text: str) -> str:
+        """Drop a leading acknowledgement, keeping everything that follows."""
+        stripped = text.lstrip()
+        for _ in range(2):  # e.g. "Sure. Certainly, here's..."
+            lowered = stripped.lower()
+            for word in cls._PLEASANTRIES:
+                if not lowered.startswith(word):
+                    continue
+                rest = stripped[len(word):]
+                # Only a real sentence opener, not "Sure enough, the bug was..."
+                if rest[:1] not in {".", ",", "!", ":", ""}:
+                    continue
+                rest = rest[1:].lstrip()
+                if not rest:
+                    return stripped
+                # Re-capitalise whatever now starts the reply.
+                stripped = rest[0].upper() + rest[1:] if rest[0].isalpha() else rest
+                break
+            else:
+                break
+        return stripped
+
+    def _system_prompt(self) -> str:
+        """Persona, plus how this mode should think, plus code mode if on.
+
+        The mode's style is what actually distinguishes Low from Max. Sending
+        it as system text works on every provider, rather than only on the
+        ones that expose a reasoning-effort parameter.
+        """
+        if self.code_mode:
+            # Swap the persona out, don't stack on top of it.
+            parts = [JARVIS_IDENTITY, CODE_MODE_PROMPT]
+        else:
+            parts = [JARVIS_SYSTEM_PROMPT]
+        parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
+        return "\n\n".join(parts)
 
     def chat(self, user_message: str, extra_context: str | None = None) -> str:
         """Send a message. `extra_context` is prepended for this request only.
@@ -78,7 +141,7 @@ class Brain:
         """
         sent = f"{extra_context}\n\n{user_message}" if extra_context else user_message
         messages = [
-            {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt()},
             *self.history,
             {"role": "user", "content": sent},
         ]
@@ -148,10 +211,11 @@ class Brain:
         # _dead and _cooldown — so a provider that was briefly throttled comes
         # back to the front on its own instead of the session being stuck on
         # the fallback for good.
+        attempts = self._attempts(chain, vision=vision)
         problems: list[str] = []
-        for provider in chain:
+        for provider, model, timeout, is_preferred in attempts:
             try:
-                reply = self._complete(provider, messages)
+                reply = self._complete(provider, messages, model, timeout)
             except AuthenticationError as exc:
                 # A rejected key won't start working mid-session.
                 self._dead.add(provider.name)
@@ -169,12 +233,18 @@ class Brain:
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
             except NotFoundError:
+                if is_preferred:
+                    # Only this mode's preferred model is missing; the provider
+                    # itself is fine and still serves its own default.
+                    problems.append(
+                        f"{provider.label}: {self.mode.label} prefers '{model}', "
+                        "which this account cannot reach"
+                    )
+                    continue
                 names = providers.list_models(provider)
                 hint = f" Available: {', '.join(names[:8])}" if names else ""
                 problems.append(
-                    f"{provider.label}: model "
-                    f"'{self._model_override or providers.model_for(provider)}' not found."
-                    f"{hint}"
+                    f"{provider.label}: model '{model}' not found.{hint}"
                 )
                 self._dead.add(provider.name)
                 continue
@@ -183,6 +253,14 @@ class Brain:
                 problems.append(f"{provider.label}: {exc}")
                 continue
             except (APIConnectionError, APIStatusError, APIError) as exc:
+                if is_preferred:
+                    # Hyperdrive's model going quiet says nothing about the
+                    # provider's ordinary model, which is tried next.
+                    problems.append(
+                        f"{provider.label}: '{model}' did not answer "
+                        f"({self._short(exc)})"
+                    )
+                    continue
                 self._back_off(provider)
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
@@ -193,6 +271,9 @@ class Brain:
 
             if reply:
                 self._active = provider
+                self._last_model = model
+                if self.code_mode:
+                    reply = self._strip_pleasantry(reply)
                 return reply, None
             problems.append(f"{provider.label}: empty response")
 
@@ -204,18 +285,67 @@ class Brain:
             "  GROQ_API_KEY=...    (https://console.groq.com/keys)"
         )
 
-    def _complete(self, provider: Provider, messages: list[dict]) -> str:
-        model = self._model_override or providers.model_for(provider)
+    def _attempts(
+        self, chain: list[Provider], vision: bool = False
+    ) -> list[tuple[Provider, str, float | None, bool]]:
+        """What to try, in order: the mode's preferred models, then the chain.
+
+        Each entry is (provider, model, timeout, is_preferred). Preferred
+        entries are the mode's own choices and are treated more gently on
+        failure — a model that never answers should not retire the provider
+        that hosts it.
+        """
+        out: list[tuple[Provider, str, float | None, bool]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for name, model in self.mode.targets:
+            provider = providers.BY_NAME.get(name)
+            if provider is None or not providers.has_key(provider):
+                continue
+            if provider.name in self._dead:
+                continue
+            if vision and not provider.vision:
+                continue
+            timeout = self.mode.first_target_timeout or self.mode.timeout
+            out.append((provider, model, timeout, True))
+            seen.add((provider.name, model))
+
+        # Fallbacks get the ordinary timeout, not the mode's headline one.
+        fallback = min(self.mode.timeout, self.mode.fallback_timeout)
+        for provider in chain:
+            model = self._model_override or providers.model_for(provider)
+            if (provider.name, model) in seen:
+                continue
+            out.append((provider, model, fallback, False))
+        return out
+
+    def _complete(
+        self,
+        provider: Provider,
+        messages: list[dict],
+        model: str | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        model = model or self._model_override or providers.model_for(provider)
         if provider.transport == "http":
             return providers.pollinations_chat(model, messages)
 
         token_param = self._token_param.get(provider.name, "max_completion_tokens")
 
-        kwargs: dict = {"model": model, "messages": messages, token_param: 2048}
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            token_param: self.mode.max_tokens,
+        }
         if provider.name not in self._no_temperature:
-            kwargs["temperature"] = 0.7
+            kwargs["temperature"] = self.mode.temperature
 
         client = providers.get_client(provider)
+        if timeout is not None:
+            # max_retries=0 matters as much as the timeout here. The cached
+            # client retries twice, so a model that simply never answers burns
+            # three full timeouts — Hyperdrive's 200s budget became 600s.
+            client = client.with_options(timeout=timeout, max_retries=0)
         try:
             response = client.chat.completions.create(**kwargs)
         except (APIStatusError, APIError, TypeError) as exc:
