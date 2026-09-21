@@ -84,6 +84,7 @@ class JarvisApp(ctk.CTk):
         self.current_image: Path | None = None
         self.active_tab = "chat"
         self._busy = False
+        self._request_id = 0
 
         self._build_layout()
         self.refresh_mode()
@@ -92,6 +93,8 @@ class JarvisApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
+        self._report_env_migration()
+        self._restore_history()
         self.chat_input.focus_set()
 
         updater.cleanup_previous_update()
@@ -242,6 +245,17 @@ class JarvisApp(ctk.CTk):
             command=self._clear_chat,
         ).pack(fill="x", padx=16, pady=4)
 
+        self.settings_btn = ctk.CTkButton(
+            sidebar,
+            text="⚙  Settings",
+            anchor="w",
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["accent_dim"],
+            command=self._open_settings,
+        )
+        self.settings_btn.pack(fill="x", padx=16, pady=4)
+
         self.update_btn = ctk.CTkButton(
             sidebar,
             text="⟳  Check for Updates",
@@ -331,6 +345,20 @@ class JarvisApp(ctk.CTk):
             command=self._send_chat,
         )
         self.send_btn.grid(row=0, column=2)
+
+        # Shown only while something is in flight. Max and Hyperdrive can take
+        # minutes, and before this there was no way out but killing the app.
+        self.stop_btn = ctk.CTkButton(
+            input_row,
+            text="Stop",
+            width=70,
+            height=44,
+            fg_color=COLORS["error"],
+            hover_color="#b91c1c",
+            command=self._stop,
+        )
+        self.stop_btn.grid(row=0, column=3, padx=(8, 0))
+        self.stop_btn.grid_remove()
 
     def _build_image_tab(self) -> None:
         self.image_frame = ctk.CTkFrame(self.content, fg_color=COLORS["bg"])
@@ -516,6 +544,45 @@ class JarvisApp(ctk.CTk):
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
+    def _report_env_migration(self) -> None:
+        """Say so when the update brought an older settings file forward."""
+        from jarvis import config
+
+        changes = getattr(config, "last_env_changes", None)
+        if not changes:
+            return
+        body = "\n".join(f"  • {c}" for c in changes)
+        self._append_message(
+            "JARVIS",
+            "Your settings file was from an older version, so I updated it:\n"
+            + body
+            + "\n\nAdd at least two API keys to it — the free ones are "
+              "listed in the file with links.",
+            is_user=False,
+        )
+
+    def _open_settings(self) -> None:
+        """Manage provider keys without leaving the app."""
+        existing = getattr(self, "_settings_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        from ui.settings import SettingsWindow
+
+        self._settings_window = SettingsWindow(self, COLORS)
+
+    def _restore_history(self) -> None:
+        """Bring back the last conversation so closing the window is not a loss."""
+        try:
+            note = self.jarvis.restore_history()
+        except Exception:
+            return
+        if note:
+            self._append_message("JARVIS", f"({note})", is_user=False)
+            self.refresh_mode()
+            self.refresh_code_mode()
+
     def _provider_text(self) -> str:
         from jarvis import providers
 
@@ -552,11 +619,41 @@ class JarvisApp(ctk.CTk):
         for widget in (self.send_btn, self.mic_btn, self.generate_btn, self.chat_input):
             widget.configure(state=state)
         self.status_label.configure(text=status)
+        try:
+            self.stop_btn.grid() if busy else self.stop_btn.grid_remove()
+        except Exception:
+            pass
 
     def _run_worker(self, work, status: str) -> None:
         """Run `work()` off-thread, marshalling results back to the Tk loop."""
+        self._request_id += 1
         self._set_busy(True, status)
+        try:
+            self.stop_btn.grid()
+        except Exception:
+            pass
         threading.Thread(target=work, daemon=True).start()
+
+    def _current(self, token: int) -> bool:
+        """False once Stop was pressed, so a late reply is discarded.
+
+        The HTTP call itself cannot be torn down mid-flight, but the user does
+        not need to care about that — what they need is the window back.
+        """
+        return token == self._request_id
+
+    def _stop(self) -> None:
+        """Abandon whatever is in flight and give the window back."""
+        if not self._busy:
+            return
+        self._request_id += 1          # invalidates any reply still coming
+        self._set_busy(False, "Stopped")
+        self._append_message(
+            "JARVIS",
+            "Stopped. Whatever came back after that is discarded — ask again, "
+            "or try a faster mode.",
+            is_user=False,
+        )
 
     def _send_chat(self) -> None:
         if self._busy:
@@ -567,20 +664,26 @@ class JarvisApp(ctk.CTk):
         self.chat_input.delete(0, "end")
         self._append_message("You", text, is_user=True)
 
+        token = self._request_id + 1
+
         def work():
             try:
                 response = self.jarvis.process(text)
-                safe_after(self, lambda: self._handle_response(response))
+                safe_after(self, lambda: self._current(token) and self._handle_response(response))
             except Exception as exc:
                 message = f"Error: {exc}"
                 traceback.print_exc()
-                safe_after(self, lambda: self._handle_error(message))
+                safe_after(self, lambda: self._current(token) and self._handle_error(message))
 
         self._run_worker(work, "Thinking...")
 
     def _handle_response(self, response: JarvisResponse) -> None:
         self._set_busy(False)
         self._refresh_provider()
+        try:
+            self.jarvis.save_history()
+        except Exception:
+            pass
         self.refresh_code_mode()
         self._append_message("JARVIS", response.text, is_user=False)
         if response.image_path:
@@ -598,14 +701,16 @@ class JarvisApp(ctk.CTk):
         if self._busy:
             return
 
+        token = self._request_id + 1
+
         def work():
             try:
                 response = self.jarvis.listen_and_respond()
-                safe_after(self, lambda: self._handle_voice(response))
+                safe_after(self, lambda: self._current(token) and self._handle_voice(response))
             except Exception as exc:
                 message = f"Voice error: {exc}"
                 traceback.print_exc()
-                safe_after(self, lambda: self._handle_error(message))
+                safe_after(self, lambda: self._current(token) and self._handle_error(message))
 
         self._run_worker(work, "Listening...")
 
@@ -632,14 +737,16 @@ class JarvisApp(ctk.CTk):
         size = SIZES[self.size_menu.get()]
         quality = self.quality_menu.get().lower()
 
+        token = self._request_id + 1
+
         def work():
             try:
                 response = self.jarvis.generate_image(prompt, size=size, quality=quality)
-                safe_after(self, lambda: self._on_image_generated(response))
+                safe_after(self, lambda: self._current(token) and self._on_image_generated(response))
             except Exception as exc:
                 message = str(exc)
                 traceback.print_exc()
-                safe_after(self, lambda: self._on_image_error(message))
+                safe_after(self, lambda: self._current(token) and self._on_image_error(message))
 
         self._run_worker(work, "Generating image...")
 
@@ -714,6 +821,8 @@ class JarvisApp(ctk.CTk):
         if not silent:
             self.update_btn.configure(state="disabled", text="⟳  Checking...")
 
+        token = self._request_id + 1
+
         def work():
             try:
                 info = updater.check_for_update()
@@ -749,6 +858,10 @@ class JarvisApp(ctk.CTk):
         UpdateDialog(self, info)
 
     def _on_close(self) -> None:
+        try:
+            self.jarvis.save_history()
+        except Exception:
+            pass
         try:
             self.jarvis.voice.stop()
         except Exception:
@@ -830,6 +943,8 @@ class UpdateDialog(ctk.CTkToplevel):
             else:
                 mb = f"{done/1048576:.1f} MB"
             safe_after(self, lambda: self.status.configure(text=f"Downloading... {mb}"))
+
+        token = self._request_id + 1
 
         def work():
             try:

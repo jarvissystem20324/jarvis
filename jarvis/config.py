@@ -24,6 +24,9 @@ DEFAULT_STT_PROVIDER = "auto"
 
 _loaded = False
 
+# What the last .env migration changed; surfaced by the UI and self-test.
+last_env_changes: list[str] = []
+
 
 IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = sys.platform.startswith("win")
@@ -101,6 +104,20 @@ def load_config() -> None:
         return
     env_path = get_base_dir() / ".env"
     _seed_env(env_path)
+
+    # Updating the app does nothing for settings written by an older one, so
+    # bring the file forward before reading it. Additive and idempotent: it
+    # never changes a value the user set, and does nothing when there is
+    # nothing missing.
+    global last_env_changes
+    try:
+        from . import envfix
+        from . import __version__
+
+        last_env_changes = envfix.migrate(env_path, __version__)
+    except Exception:
+        last_env_changes = []
+
     if env_path.exists():
         load_dotenv(env_path)
     else:

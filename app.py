@@ -118,6 +118,11 @@ def selftest() -> int:
 
     check("https/TLS", _tls)
 
+    from jarvis import config as _cfg
+    if getattr(_cfg, "last_env_changes", None):
+        for change in _cfg.last_env_changes:
+            lines.append(f"[ OK ] .env updated: {change}")
+
     report = "\n".join(lines)
     print(report)
     try:

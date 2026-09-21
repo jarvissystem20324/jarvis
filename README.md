@@ -1,4 +1,4 @@
-# JARVIS 2.9
+# JARVIS 3.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -75,6 +75,10 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/addons` | List installed addons |
 | `/help` | List commands, including addon ones |
 | `/quit` | Exit |
+| `/export` | Save the conversation as Markdown |
+| `/retry [provider]` | Ask the last question again, optionally elsewhere |
+| `/mode <tier>` | Low, Mid, High, Max or Hyperdrive |
+| `/code` | Toggle the coding agent |
 
 ### From the bundled addons
 

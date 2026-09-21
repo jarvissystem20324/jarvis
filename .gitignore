@@ -1,4 +1,7 @@
 .env
+# Migration backups hold the same keys as .env itself.
+.env.backup-*
+.env.*.bak
 venv/
 __pycache__/
 *.pyc

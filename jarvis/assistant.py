@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import modes, personality, tools
+from . import history, modes, personality, providers, tools
 from .addons import AddonManager
 from .brain import Brain
 from .config import voice_enabled_by_default
@@ -86,7 +86,19 @@ class Jarvis:
 
             if name == "clear":
                 self.brain.clear_history()
+                history.clear()
                 return JarvisResponse(text="Conversation history cleared.")
+
+            if name == "export":
+                if not self.brain.history:
+                    return JarvisResponse(text="Nothing to export yet.")
+                path = history.export_markdown(self.brain.history)
+                return JarvisResponse(
+                    text=f"Conversation saved to:\n  {path}"
+                )
+
+            if name == "retry":
+                return self.retry(args)
 
             if name == "voice":
                 return JarvisResponse(text=self.toggle_voice())
@@ -181,6 +193,80 @@ class Jarvis:
                 "Use /code again to switch back."
             )
         return "Code mode off. Back to normal conversation."
+
+    def retry(self, args: str) -> JarvisResponse:
+        """Ask the last question again, optionally on a different provider.
+
+        A provider having an off moment is common enough — a throttled model,
+        a truncated answer — that re-asking without retyping is worth a
+        command. The failed answer is dropped so it cannot influence the new
+        one.
+        """
+        last_user = next(
+            (m["content"] for m in reversed(self.brain.history)
+             if m.get("role") == "user"),
+            None,
+        )
+        if last_user is None:
+            return JarvisResponse(text="There's nothing to retry yet.")
+
+        wanted = (args or "").strip().lower()
+        if wanted and wanted not in providers.BY_NAME:
+            names = ", ".join(p.name for p in providers.AUTO_CHAT_PROVIDERS)
+            return JarvisResponse(
+                text=f"No provider called '{wanted}'. Try one of: {names}"
+            )
+
+        # Drop the exchange being retried so the model isn't anchored to it.
+        while self.brain.history and self.brain.history[-1].get("role") == "assistant":
+            self.brain.history.pop()
+        if self.brain.history and self.brain.history[-1].get("role") == "user":
+            self.brain.history.pop()
+
+        previous = None
+        if wanted:
+            import os
+
+            previous = os.environ.get("JARVIS_PROVIDER")
+            os.environ["JARVIS_PROVIDER"] = wanted
+            self.brain._cooldown.clear()
+            self.brain._dead.discard(wanted)
+        try:
+            reply = self.brain.chat(
+                last_user, extra_context=self.addons.context_for(last_user) or None
+            )
+        finally:
+            if wanted:
+                import os
+
+                if previous is None:
+                    os.environ.pop("JARVIS_PROVIDER", None)
+                else:
+                    os.environ["JARVIS_PROVIDER"] = previous
+
+        self._maybe_speak(reply)
+        return JarvisResponse(text=reply)
+
+    def save_history(self) -> None:
+        """Persist the conversation so closing the window doesn't lose it."""
+        history.save(
+            self.brain.history,
+            mode=self.brain.mode.name,
+            code_mode=self.brain.code_mode,
+        )
+
+    def restore_history(self) -> str:
+        """Reload the previous conversation. Returns a note, or ''."""
+        messages, mode, code_mode = history.load()
+        if not messages:
+            return ""
+        self.brain.history = messages
+        if mode:
+            self.brain.set_mode(mode)
+        if code_mode:
+            self.brain.code_mode = True
+            self.brain.persona_override = personality.CODE_MODE_PROMPT
+        return history.describe_saved()
 
     def _with_addon_help(self, builtin: str) -> str:
         lines = self.addons.help_lines()
