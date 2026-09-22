@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from . import history, modes, personality, providers, tools
+from . import history, modes, personality, providers, scanner, security, tools
 from .addons import AddonManager
 from .brain import Brain
 from .config import voice_enabled_by_default
@@ -72,7 +73,11 @@ class Jarvis:
             image_path=path,
         )
 
-    def process(self, user_input: str) -> JarvisResponse:
+    def process(
+        self, user_input: str, should_commit: Callable[[], bool] | None = None
+    ) -> JarvisResponse:
+        """Handle one input. `should_commit` lets the caller disown a
+        finished exchange — see Brain.chat."""
         text = (user_input or "").strip()
         if not text:
             return JarvisResponse(text="I didn't catch that. Could you repeat?")
@@ -120,6 +125,31 @@ class Jarvis:
             if name == "code":
                 return JarvisResponse(text=self.toggle_code_mode())
 
+            if name == "privacy":
+                # Log the switch-on *before* flipping it, or the audit trail
+                # just stops with no explanation — and a gap you cannot
+                # account for is the one thing an audit log must not have.
+                if not security.privacy.on:
+                    security.audit.record(
+                        "privacy", "enabled", "recording stops here"
+                    )
+                text_out = security.privacy.toggle()
+                if not security.privacy.on:
+                    security.audit.record("privacy", "disabled", "recording resumed")
+                return JarvisResponse(text=text_out)
+
+            if name == "security":
+                return JarvisResponse(text=security.summary())
+
+            if name == "audit":
+                return JarvisResponse(text=self.show_audit(args))
+
+            if name == "scan":
+                return JarvisResponse(text=self.scan(args))
+
+            if name == "sandbox":
+                return JarvisResponse(text=self.sandbox(args))
+
             # Addons are dispatched before the offline tools so they can add
             # new commands. They cannot capture a built-in: the loader refuses
             # to register anything in RESERVED_COMMANDS.
@@ -138,10 +168,181 @@ class Jarvis:
                 self._maybe_speak(builtin)
                 return JarvisResponse(text=builtin)
 
-        reply = self.brain.chat(text, extra_context=self.addons.context_for(text) or None)
+        reply = self.brain.chat(
+            text,
+            extra_context=self.addons.context_for(text) or None,
+            should_commit=should_commit,
+        )
         self.addons.notify_reply(text, reply)
         self._maybe_speak(reply)
         return JarvisResponse(text=reply)
+
+    # --- security ---------------------------------------------------------
+
+    def show_audit(self, args: str) -> str:
+        """What JARVIS has actually done, newest last."""
+        if args.strip().lower() == "clear":
+            return security.audit.clear()
+
+        entries = security.audit.read(limit=40)
+        if not entries:
+            if security.privacy.on:
+                return "Privacy mode is on, so nothing is being recorded."
+            return f"Nothing recorded yet. The log lives at {security.audit.path()}"
+
+        lines = []
+        for item in entries:
+            when = str(item.get("at", ""))[11:19]
+            row = f"  {when}  {item.get('action', '?')}"
+            if item.get("detail"):
+                row += f": {item['detail']}"
+            if item.get("outcome"):
+                row += f"  [{item['outcome']}]"
+            lines.append(row)
+        return (
+            f"Last {len(entries)} actions (no message content is recorded):\n"
+            + "\n".join(lines)
+            + f"\n\nFull log: {security.audit.path()}   /audit clear to wipe it."
+        )
+
+    def _project_root(self):
+        """The folder code mode has open, if any."""
+        for entry in self.addons.loaded:
+            root = getattr(entry.addon, "root", None)
+            if root is not None:
+                return root
+        return None
+
+    def scan(self, args: str) -> str:
+        """Look for security problems — in a path, or in JARVIS itself."""
+        target = args.strip().strip('"').strip("'")
+        security.audit.record("scan", target or "self + open project")
+
+        sections: list[str] = []
+        findings: list[scanner.Finding] = []
+
+        if not target or target.lower() == "self":
+            own = security.env_file_findings()
+            if own:
+                sections.append(
+                    "JARVIS's own install:\n"
+                    + "\n".join(
+                        f"  [{level.upper():4}] {title}\n         {detail}"
+                        for level, title, detail in own
+                    )
+                )
+            else:
+                sections.append("JARVIS's own install:\n  Nothing wrong found.")
+
+        if target and target.lower() != "self":
+            path = Path(target).expanduser()
+            if not path.exists():
+                return f"No such file or folder:\n  {path}"
+            if path.is_dir():
+                findings, seen = scanner.scan_project(path)
+                sections.append(
+                    f"{path} — {seen} files read\n" + scanner.format_report(findings)
+                )
+            else:
+                findings = scanner.scan_file(path)
+                sections.append(f"{path}\n" + scanner.format_report(findings))
+        elif not target:
+            root = self._project_root()
+            if root is not None:
+                findings, seen = scanner.scan_project(root)
+                sections.append(
+                    f"Open project {root} — {seen} files read\n"
+                    + scanner.format_report(findings)
+                )
+            else:
+                sections.append(
+                    "No project open, so I only checked JARVIS itself.\n"
+                    "  /project <folder> first, or /scan <path> for a one-off."
+                )
+
+        report = "\n\n".join(sections)
+        high = sum(1 for f in findings if f.level == "high")
+        warn = sum(1 for f in findings if f.level == "warn")
+        headline = (
+            f"{high} high, {warn} worth a look"
+            if findings else "Nothing flagged"
+        )
+
+        verdict = ""
+        if findings:
+            worst = scanner.format_report(findings, limit=12)
+            verdict = self.brain.ask_once(
+                "You are reviewing the output of a static security scan. Say "
+                "which of these actually matter and in what order, and which "
+                "are noise. Be brief and concrete. Do not repeat the list.\n\n"
+                + worst
+            )
+            verdict = f"\n\nWhat I make of it:\n{verdict}"
+
+        return f"Security scan — {headline}\n\n{report}{verdict}"
+
+    def sandbox(self, args: str) -> str:
+        """Say what a piece of code would do. Never runs it.
+
+        Sandbox mode here is analysis, not containment: this machine is
+        Windows Home, which has no Windows Sandbox and no Hyper-V, and a
+        subprocess under the same user account is not isolation. Reading the
+        code and reporting its capabilities is a promise that can actually be
+        kept — nothing ever executes, so nothing can escape.
+        """
+        target = args.strip().strip('"').strip("'")
+        if not target:
+            return (
+                "Usage: /sandbox <file>\n"
+                "I read the file and tell you what it would do — network, files, "
+                "processes, persistence, obfuscation — without ever running it."
+            )
+        path = Path(target).expanduser()
+        if not path.exists():
+            return f"No such file:\n  {path}"
+        if path.is_dir():
+            return f"That's a folder. Point me at one file, or use /scan {path}"
+
+        try:
+            if path.stat().st_size > scanner.MAX_SCAN_BYTES:
+                return f"{path.name} is too large to analyse in one go."
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return f"Couldn't read it: {exc}"
+
+        security.audit.record("sandbox", path.name, "analysed, not executed")
+
+        caps = scanner.capabilities(text)
+        findings = scanner.scan_text(text, path.name, path.suffix.lower())
+        level = scanner.risk_level(findings, caps)
+
+        parts = [
+            f"Sandbox analysis — {path.name}  ({len(text.splitlines())} lines)",
+            f"Risk: {level}     Nothing was executed.",
+        ]
+        if caps:
+            block = []
+            for title, meaning, hits in caps:
+                block.append(f"  - {title} — {meaning}")
+                block.extend(f"      {h}" for h in hits)
+            parts.append("What it can do:\n" + "\n".join(block))
+        else:
+            parts.append(
+                "What it can do:\n  Nothing that reaches outside itself — no "
+                "network, files, or other processes."
+            )
+        if findings:
+            parts.append("Problems in the code:\n" + scanner.format_report(findings, 10))
+
+        explanation = self.brain.ask_once(
+            "This file was sent to the user and has NOT been run. From the "
+            "source alone, say what the program is for, whether its behaviour "
+            "matches what it claims, and whether you would run it. If anything "
+            "is disguised, say exactly where. Be brief.\n\n"
+            f"--- {path.name} ---\n{text[:20000]}"
+        )
+        parts.append(f"Verdict:\n{explanation}")
+        return "\n\n".join(parts)
 
     # --- modes ------------------------------------------------------------
 
@@ -248,7 +449,13 @@ class Jarvis:
         return JarvisResponse(text=reply)
 
     def save_history(self) -> None:
-        """Persist the conversation so closing the window doesn't lose it."""
+        """Persist the conversation so closing the window doesn't lose it.
+
+        Privacy mode stops this entirely — what is already saved is left
+        alone, but nothing new is written.
+        """
+        if security.privacy.on:
+            return
         history.save(
             self.brain.history,
             mode=self.brain.mode.name,

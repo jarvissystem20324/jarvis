@@ -118,6 +118,23 @@ def selftest() -> int:
 
     check("https/TLS", _tls)
 
+    def _security() -> str:
+        """The security features, and what this install itself looks like."""
+        from jarvis import security as _sec
+
+        problems = _sec.env_file_findings()
+        high = [p for p in problems if p[0] == "high"]
+        if high:
+            # A real problem with this install should fail the build, not be
+            # buried three lines into a passing report.
+            raise RuntimeError("; ".join(f"{t} — {d}" for _l, t, d in high))
+        state = "prompts on, audit on"
+        if problems:
+            state += f", {len(problems)} advisory"
+        return state
+
+    check("security", _security)
+
     from jarvis import config as _cfg
     if getattr(_cfg, "last_env_changes", None):
         for change in _cfg.last_env_changes:

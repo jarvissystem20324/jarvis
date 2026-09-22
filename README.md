@@ -1,4 +1,4 @@
-# JARVIS 3.0
+# JARVIS 3.1
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -77,8 +77,21 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/quit` | Exit |
 | `/export` | Save the conversation as Markdown |
 | `/retry [provider]` | Ask the last question again, optionally elsewhere |
-| `/mode <tier>` | Low, Mid, High, Max or Hyperdrive |
+| `/mode <tier>` | Low, Mid, High, Max, Hyperdrive or Security |
 | `/code` | Toggle the coding agent |
+| `/find <text>` | Search this conversation (Ctrl+F) |
+| `/copy [code]` | Copy the last reply, or just its code block |
+| `/keys` | List the keyboard shortcuts |
+
+### Security
+
+| Command | Description |
+| --- | --- |
+| `/scan [path]` | Look for security problems — in a folder, a file, or JARVIS itself |
+| `/sandbox <file>` | Say what untrusted code would do, without running it |
+| `/audit [clear]` | What JARVIS has actually done |
+| `/privacy` | Stop saving anything: no history, no audit, no stored facts |
+| `/security` | Current security settings |
 
 ### From the bundled addons
 
@@ -91,17 +104,69 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/read` | Transcribe the text currently on screen |
 | `/remember <fact>` | Store a fact permanently |
 | `/memories`, `/forget <n\|all>` | List / delete stored facts |
+| `/import <file.txt>` | Load a text file into memory, a paragraph per fact |
+| `/who <name>` | Look someone up. `/who add <name>: <facts>` to introduce one |
+| `/people` | Everyone JARVIS knows |
 | `/hotkey` | Show the global summon shortcut |
+| `/project <folder>` | Point the coding agent at real code |
+| `/tree`, `/files`, `/show <path>` | Layout, file list, read one file |
+| `/apply [path]`, `/undo` | Write the files JARVIS proposed, or roll them back |
+| `/test` | Run the project's tests and diagnose the failures |
+| `/diff` | Review uncommitted changes |
 
 `/see` and `/read` need a provider that accepts images — Gemini or OpenAI.
 Groq's text models don't.
+
+## Security
+
+Five things, and one of them is deliberately less than its name suggests.
+
+**Permission prompts.** Anything that reaches outside the conversation asks
+first, every time: running a command, writing files, capturing the screen,
+sending your code to a provider, running your tests. Deny is the default —
+it is what Escape does, what closing the dialog does, and what happens if the
+prompt goes unanswered. A prompt you dismiss without reading never means yes.
+
+**Audit log.** `data/audit.log`, one JSON object per line: what happened,
+which provider answered, how long it took, and whether you allowed it. It
+never records what you or JARVIS said, so it is safe to hand to someone else.
+`/audit` shows the recent entries.
+
+**Security scan.** `/scan` looks for hardcoded API keys (reported by shape,
+never by value), shell injection, unsafe deserialization, SQL built by string
+formatting, TLS verification turned off, and a dozen more. `/scan self`
+checks JARVIS's own install instead: leftover `.env` backups, a non-HTTPS
+update URL, a `.env` that is not git-ignored. The static findings are ranked
+by a model afterwards, which says which ones actually matter.
+
+**Security mode.** A sixth thinking tier beside Low…Hyperdrive. Every reply is
+written by a security reviewer: name the line, say what an attacker sends and
+what they get, give the fix as code, and say plainly when something is fine.
+
+**Sandbox mode — read this part.** `/sandbox <file>` reads untrusted code and
+reports what it would do: the network it touches, the files it writes, the
+processes it spawns, whether it installs itself to start at boot, whether it
+is obfuscated. It **never executes the file.**
+
+That is analysis, not containment, and the distinction is the point. Real
+isolation on Windows needs Hyper-V or Docker, and Windows Home has neither —
+a subprocess under your own account is not a sandbox, whatever it is called.
+So JARVIS does the thing it can actually promise: nothing runs, so nothing can
+escape. If you need to *execute* something untrusted, use a VM.
+
+**Privacy mode.** `/privacy` stops everything that persists — no conversation
+saved, no audit lines, no stored facts or people sent with your messages.
+Files already on disk are left alone; this stops new writing, it does not
+delete. The log records the moment recording stopped, so the gap is explained.
 
 ## Addons
 
 Addons are single `.py` files in the `addons/` folder next to the app. They're
 loaded at startup; a broken one is reported and skipped rather than taking the
-app down. The four that ship are ordinary addons with no special privileges —
-read them as worked examples.
+app down. The six that ship are ordinary addons with no special privileges —
+read them as worked examples. They cannot take over a built-in command, and
+the security commands in particular are reserved: an addon that could
+replace `/scan` or `/audit` could also hide what it was doing.
 
 ```python
 from jarvis.addons import Addon, Command

@@ -253,6 +253,13 @@ class SettingsWindow(ctk.CTkToplevel):
             else:
                 os.environ.pop(name, None)
         providers.reset_clients()
+        # New clients are not enough: a provider demoted earlier in the
+        # session because its key was rejected stays demoted, so the key the
+        # user just fixed would go untried until the next restart.
+        try:
+            self.master.jarvis.brain.reset_failures()
+        except AttributeError:
+            pass
         self.original = read_env()
 
         for name, state in self.status.items():

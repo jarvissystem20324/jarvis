@@ -122,7 +122,30 @@ HYPERDRIVE = Mode(
     accent="#a855f7",
 )
 
-ALL: tuple[Mode, ...] = (LOW, MID, HIGH, MAX, HYPERDRIVE)
+SECURITY = Mode(
+    name="security",
+    label="Security",
+    blurb="Reads everything as an attacker would. Thorough and suspicious.",
+    style=(
+        "Answer as a security reviewer. Assume every input is hostile and every "
+        "caller is untrusted until the code proves otherwise.\n"
+        "- Name the specific weakness, not a category: say which line, what an "
+        "attacker sends, and what they get.\n"
+        "- Rank by what an attacker would actually reach first, not by how "
+        "interesting the bug is.\n"
+        "- Give the concrete fix, as code, not 'validate input'.\n"
+        "- Say plainly when something is fine. Inventing findings to look "
+        "thorough wastes the reader's time and trains them to ignore you.\n"
+        "- Consider what the code does not do: missing authentication, missing "
+        "limits, errors that leak internals, secrets in logs."
+    ),
+    max_tokens=6144,
+    temperature=0.4,
+    timeout=180.0,
+    accent="#ef4444",
+)
+
+ALL: tuple[Mode, ...] = (LOW, MID, HIGH, MAX, HYPERDRIVE, SECURITY)
 BY_NAME = {m.name: m for m in ALL}
 DEFAULT = MID
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from jarvis import security
 from jarvis.assistant import Jarvis
 from jarvis.config import load_config
 
@@ -17,6 +18,9 @@ def main() -> int:
             pass
 
     load_config()
+    # Without this the CLI would allow sensitive actions unasked, because
+    # there is no window to put the question in.
+    security.permissions.set_asker(security.console_asker)
 
     try:
         jarvis = Jarvis()

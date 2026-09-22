@@ -46,6 +46,9 @@ RESERVED_COMMANDS = frozenset({
     "quit", "exit", "clear", "voice", "image", "addons",
     "help", "run", "open", "search", "time", "date", "system",
     "mode", "code", "export", "retry",
+    # Security commands must never be shadowed by an addon: an addon that
+    # could take over /scan or /audit could also hide what it was doing.
+    "scan", "sandbox", "audit", "privacy", "security",
 })
 
 
@@ -277,6 +280,13 @@ class AddonManager:
         Returns only the addition — the caller keeps the user's own words
         separate so history stays readable.
         """
+        # Privacy mode: stored facts and people stay on the machine. One
+        # gate here covers every addon, including any the user writes.
+        from . import security
+
+        if security.privacy.on:
+            return ""
+
         extras: list[str] = []
         for entry in self.loaded:
             try:

@@ -13,7 +13,7 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont
 
-from jarvis import __version__, modes
+from jarvis import __version__, modes, security
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
@@ -85,6 +85,13 @@ class JarvisApp(ctk.CTk):
         self.active_tab = "chat"
         self._busy = False
         self._request_id = 0
+        # The most recent thing JARVIS said, for /copy and the Copy button.
+        self._last_reply = ""
+        self._find_needle = ""
+
+        # Anything sensitive asks before it happens, and the question has to
+        # reach the Tk thread from whichever worker raised it.
+        security.permissions.set_asker(self._ask_permission)
 
         self._build_layout()
         self.refresh_mode()
@@ -92,6 +99,7 @@ class JarvisApp(ctk.CTk):
         self._show_tab("chat")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._bind_shortcuts()
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
         self._report_env_migration()
         self._restore_history()
@@ -360,6 +368,30 @@ class JarvisApp(ctk.CTk):
         self.stop_btn.grid(row=0, column=3, padx=(8, 0))
         self.stop_btn.grid_remove()
 
+        # A row of things you otherwise have to remember a command for.
+        quick = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
+        quick.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        for label, command in (
+            ("⧉ Copy reply", lambda: self._quick(self._copy_last(""))),
+            ("⧉ Copy code", lambda: self._quick(self._copy_last("code"))),
+            ("⌕ Find", self._prompt_find),
+            ("↧ Export", lambda: self._run_text("/export")),
+            ("⌨ Shortcuts", lambda: self._quick(self._ui_command("/keys") or "")),
+        ):
+            ctk.CTkButton(
+                quick, text=label, height=26, width=96,
+                font=ctk.CTkFont(size=11),
+                fg_color="transparent", hover_color=COLORS["accent_dim"],
+                text_color=COLORS["muted"], command=command,
+            ).pack(side="left", padx=(0, 6))
+
+    def _quick(self, message: str) -> None:
+        """Report the result of a toolbar button without cluttering the chat."""
+        if message:
+            self.status_label.configure(text=message.splitlines()[0][:90])
+            if message.count("\n") > 1:
+                self._append_message("JARVIS", message, is_user=False)
+
     def _build_image_tab(self) -> None:
         self.image_frame = ctk.CTkFrame(self.content, fg_color=COLORS["bg"])
         self.image_frame.grid_rowconfigure(1, weight=1)
@@ -535,7 +567,13 @@ class JarvisApp(ctk.CTk):
 
     # --- chat -------------------------------------------------------------
 
-    def _append_message(self, sender: str, text: str, is_user: bool) -> None:
+    def _append_message(
+        self, sender: str, text: str, is_user: bool, record: bool = True
+    ) -> None:
+        """Put a message on screen. `record=False` for the window's own
+        notices, so /copy still means JARVIS's last real answer."""
+        if not is_user and record:
+            self._last_reply = text
         self.chat_log.configure(state="normal")
         tag = "user" if is_user else "jarvis"
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
@@ -573,15 +611,196 @@ class JarvisApp(ctk.CTk):
         self._settings_window = SettingsWindow(self, COLORS)
 
     def _restore_history(self) -> None:
-        """Bring back the last conversation so closing the window is not a loss."""
+        """Bring back the last conversation, and put it back on screen.
+
+        Restoring it silently was worse than not restoring it: the window
+        looked empty while JARVIS quietly remembered everything, so a reply
+        referring to "the file we discussed" came out of nowhere.
+        """
         try:
             note = self.jarvis.restore_history()
         except Exception:
             return
-        if note:
-            self._append_message("JARVIS", f"({note})", is_user=False)
-            self.refresh_mode()
-            self.refresh_code_mode()
+        if not note:
+            return
+
+        self._append_message("JARVIS", f"— {note} —", is_user=False, record=False)
+        for message in self.jarvis.brain.history:
+            is_user = message.get("role") == "user"
+            self._append_message(
+                "You" if is_user else "JARVIS",
+                message.get("content") or "",
+                is_user=is_user,
+            )
+        self._append_message(
+            "JARVIS", "— end of restored conversation —", is_user=False, record=False
+        )
+        self.refresh_mode()
+        self.refresh_code_mode()
+
+    # --- security prompts -------------------------------------------------
+
+    def _ask_permission(self, request) -> bool:
+        """Put a permission request to the user. Called from a worker thread.
+
+        The worker blocks here until the dialog is answered, which is the
+        point: the action must not start while the question is open. A window
+        that has gone away, or an unanswered prompt, both mean no.
+        """
+        answer = {"allowed": False}
+        done = threading.Event()
+
+        def show():
+            try:
+                dialog = PermissionDialog(self, request)
+                dialog.wait_window()
+                answer["allowed"] = dialog.allowed
+            except Exception:
+                answer["allowed"] = False
+            finally:
+                done.set()
+
+        try:
+            self.after(0, show)
+        except (RuntimeError, tkinter.TclError):
+            return False
+
+        if not done.wait(timeout=security.ASK_TIMEOUT):
+            return False
+        return answer["allowed"]
+
+    # --- keyboard and UI-only commands ------------------------------------
+
+    SHORTCUTS: tuple[tuple[str, str], ...] = (
+        ("Enter", "Send the message"),
+        ("Ctrl+F", "Find text in the conversation"),
+        ("Ctrl+L", "Jump to the message box"),
+        ("Ctrl+K", "Clear the conversation"),
+        ("Ctrl+M", "Next thinking mode"),
+        ("Ctrl+D", "Toggle code mode"),
+        ("Ctrl+E", "Export the conversation to Markdown"),
+        ("Ctrl+Shift+C", "Copy JARVIS's last reply"),
+        ("Ctrl+,", "Open settings"),
+        ("Escape", "Stop the request in flight"),
+    )
+
+    def _bind_shortcuts(self) -> None:
+        bindings = {
+            "<Control-f>": lambda e: self._prompt_find(),
+            "<Control-l>": lambda e: self.chat_input.focus_set(),
+            "<Control-k>": lambda e: self._run_text("/clear"),
+            "<Control-m>": lambda e: self._cycle_mode(),
+            "<Control-d>": lambda e: self._run_text("/code"),
+            "<Control-e>": lambda e: self._run_text("/export"),
+            "<Control-C>": lambda e: self._copy_last(""),
+            "<Control-comma>": lambda e: self._open_settings(),
+            "<Escape>": lambda e: self._stop(),
+        }
+        for sequence, handler in bindings.items():
+            try:
+                # "break" stops Tk also inserting the character into the entry.
+                self.bind_all(sequence, lambda e, h=handler: (h(e), "break")[1])
+            except tkinter.TclError:
+                pass
+
+    def _run_text(self, text: str) -> None:
+        """Fire a command as though it had been typed."""
+        if self._busy:
+            return
+        self.chat_input.delete(0, "end")
+        self.chat_input.insert(0, text)
+        self._send_chat()
+
+    # Commands the UI answers itself, because they act on the window rather
+    # than on the conversation. Checked before anything is sent anywhere.
+    def _ui_command(self, text: str) -> str | None:
+        if not text.startswith("/"):
+            return None
+        name, _, args = text[1:].strip().partition(" ")
+        name = name.lower()
+        if name == "find":
+            return self._find_in_chat(args)
+        if name == "copy":
+            return self._copy_last(args)
+        if name in {"keys", "shortcuts"}:
+            return "Keyboard shortcuts:\n" + "\n".join(
+                f"  {key:<16} {what}" for key, what in self.SHORTCUTS
+            )
+        return None
+
+    def _prompt_find(self) -> None:
+        self.chat_input.delete(0, "end")
+        self.chat_input.insert(0, "/find ")
+        self.chat_input.icursor("end")
+        self.chat_input.focus_set()
+
+    def _find_in_chat(self, needle: str) -> str:
+        """Highlight every occurrence and scroll to the first."""
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        textbox.tag_remove("found", "1.0", "end")
+
+        needle = needle.strip()
+        if not needle:
+            self._find_needle = ""
+            return "Usage: /find <text>   (Ctrl+F does the same)"
+
+        textbox.tag_config("found", background=COLORS["accent"], foreground=COLORS["bg"])
+        index = "1.0"
+        hits = 0
+        first = None
+        while True:
+            index = textbox.search(needle, index, nocase=True, stopindex="end")
+            if not index:
+                break
+            end = f"{index}+{len(needle)}c"
+            textbox.tag_add("found", index, end)
+            first = first or index
+            index = end
+            hits += 1
+
+        self._find_needle = needle
+        if not hits:
+            return f"'{needle}' doesn't appear in this conversation."
+        if first:
+            self.chat_log.see(first)
+        return (
+            f"{hits} match{'es' if hits != 1 else ''} for '{needle}', highlighted. "
+            "/find with nothing clears it."
+        )
+
+    def _copy_last(self, args: str) -> str:
+        """Copy JARVIS's last reply, or just the code in it."""
+        if not self._last_reply:
+            return "I haven't said anything to copy yet."
+
+        text = self._last_reply
+        what = "last reply"
+        if args.strip().lower() in {"code", "block"}:
+            blocks = []
+            collecting = False
+            body: list[str] = []
+            for line in text.splitlines():
+                if line.lstrip().startswith("```"):
+                    if collecting:
+                        blocks.append("\n".join(body))
+                        body = []
+                    collecting = not collecting
+                    continue
+                if collecting:
+                    body.append(line)
+            if not blocks:
+                return "There's no code block in my last reply."
+            text = blocks[-1]
+            what = "last code block"
+
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update_idletasks()
+        except tkinter.TclError as exc:
+            return f"Couldn't reach the clipboard: {exc}"
+        lines = len(text.splitlines())
+        return f"Copied the {what} — {lines} line{'s' if lines != 1 else ''}, {len(text):,} characters."
 
     def _provider_text(self) -> str:
         from jarvis import providers
@@ -664,11 +883,20 @@ class JarvisApp(ctk.CTk):
         self.chat_input.delete(0, "end")
         self._append_message("You", text, is_user=True)
 
+        # /find, /copy and /keys act on this window, so they are answered
+        # here rather than sent to a provider.
+        local = self._ui_command(text)
+        if local is not None:
+            self._append_message("JARVIS", local, is_user=False, record=False)
+            return
+
         token = self._request_id + 1
 
         def work():
             try:
-                response = self.jarvis.process(text)
+                response = self.jarvis.process(
+                    text, should_commit=lambda: self._current(token)
+                )
                 safe_after(self, lambda: self._current(token) and self._handle_response(response))
             except Exception as exc:
                 message = f"Error: {exc}"
@@ -869,6 +1097,93 @@ class JarvisApp(ctk.CTk):
         self.destroy()
 
 
+class PermissionDialog(ctk.CTkToplevel):
+    """Asks before JARVIS does something outside the conversation.
+
+    Deny is the default everywhere: it is what the buttons focus, what Escape
+    does, and what closing the window does. A prompt you dismiss without
+    reading should never be the same as saying yes.
+    """
+
+    def __init__(self, parent, request):
+        super().__init__(parent)
+        self.allowed = False
+
+        self.title("JARVIS needs permission")
+        self.geometry("520x270")
+        self.resizable(False, False)
+        self.configure(fg_color=COLORS["bg"])
+        self.transient(parent)
+        self.after(80, self._take_over)
+
+        ctk.CTkLabel(
+            self, text="Allow this?", font=ctk.CTkFont(size=13),
+            text_color=COLORS["muted"],
+        ).pack(anchor="w", padx=24, pady=(18, 0))
+        ctk.CTkLabel(
+            self, text=request.capability.title,
+            font=ctk.CTkFont(size=19, weight="bold"),
+            text_color=COLORS["accent"], anchor="w", justify="left",
+            wraplength=470,
+        ).pack(anchor="w", padx=24, pady=(2, 8))
+
+        if request.detail:
+            box = ctk.CTkTextbox(
+                self, height=62, wrap="word", fg_color=COLORS["panel"],
+                text_color=COLORS["text"], font=ctk.CTkFont(size=12),
+            )
+            box.pack(fill="x", padx=24)
+            box.insert("1.0", request.detail)
+            box.configure(state="disabled")
+
+        ctk.CTkLabel(
+            self, text=request.capability.why, font=ctk.CTkFont(size=11),
+            text_color=COLORS["muted"], anchor="w", justify="left",
+            wraplength=470,
+        ).pack(anchor="w", padx=24, pady=(10, 0))
+
+        if request.context:
+            ctk.CTkLabel(
+                self, text=f"Asked by {request.context}",
+                font=ctk.CTkFont(size=10), text_color="#475569", anchor="w",
+            ).pack(anchor="w", padx=24, pady=(2, 0))
+
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=24, pady=(14, 18))
+        allow = ctk.CTkButton(
+            row, text="Allow once", width=130, fg_color=COLORS["accent_dim"],
+            hover_color=COLORS["accent"], command=self._allow,
+        )
+        allow.pack(side="right")
+        deny = ctk.CTkButton(
+            row, text="Deny", width=100, fg_color="transparent", border_width=1,
+            hover_color=COLORS["error"], command=self._deny,
+        )
+        deny.pack(side="right", padx=(0, 8))
+        self._deny_btn = deny
+
+        self.protocol("WM_DELETE_WINDOW", self._deny)
+        self.bind("<Escape>", lambda e: self._deny())
+        self.bind("<Return>", lambda e: self._deny())
+
+    def _take_over(self) -> None:
+        try:
+            self.grab_set()
+            self.lift()
+            self.focus_force()
+            self._deny_btn.focus_set()
+        except tkinter.TclError:
+            pass
+
+    def _allow(self) -> None:
+        self.allowed = True
+        self.destroy()
+
+    def _deny(self) -> None:
+        self.allowed = False
+        self.destroy()
+
+
 class UpdateDialog(ctk.CTkToplevel):
     """Shows the release notes, then downloads and installs on confirmation."""
 
@@ -943,8 +1258,6 @@ class UpdateDialog(ctk.CTkToplevel):
             else:
                 mb = f"{done/1048576:.1f} MB"
             safe_after(self, lambda: self.status.configure(text=f"Downloading... {mb}"))
-
-        token = self._request_id + 1
 
         def work():
             try:

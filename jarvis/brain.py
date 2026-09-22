@@ -9,6 +9,7 @@ error and losing the conversation.
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 from openai import (
     APIConnectionError,
@@ -19,8 +20,8 @@ from openai import (
     RateLimitError,
 )
 
-from . import modes, providers
-from .personality import CODE_MODE_PROMPT, JARVIS_IDENTITY, JARVIS_SYSTEM_PROMPT
+from . import modes, providers, security
+from .personality import JARVIS_IDENTITY, JARVIS_SYSTEM_PROMPT
 from .providers import Provider
 
 # Conversation turns (user + assistant messages) kept in context. The system
@@ -42,6 +43,10 @@ class Brain:
         self.history: list[dict[str, str]] = []
         self._model_override = model
         self._active: Provider | None = None
+        # Which model actually answered, for the status line. Set on every
+        # successful call; initialised here so reading it before the first
+        # request cannot raise.
+        self._last_model: str = ""
         self.mode = modes.DEFAULT
         # Set by code mode; replaces the butler persona entirely.
         self.persona_override: str | None = None
@@ -55,6 +60,11 @@ class Brain:
         # `max_completion_tokens`. Learned per provider on first failure.
         self._token_param: dict[str, str] = {}
         self._no_temperature: set[str] = set()
+        # (provider, model) pairs a mode asked for that never answered. Tried
+        # once per session and then skipped: kimi-k3 is listed in NVIDIA's
+        # catalogue but does not reply on the free tier, so without this
+        # Hyperdrive pays its full 200-second leash on every single message.
+        self._slow_targets: set[tuple[str, str]] = set()
 
     # --- public ----------------------------------------------------------
 
@@ -77,9 +87,19 @@ class Brain:
         return f"{self._active.label} · {model}{suffix}"
 
     def system_prompt(self) -> str:
-        """Persona plus the active mode's thinking style."""
-        base = self.persona_override or JARVIS_SYSTEM_PROMPT
-        return base + "\n\n" + self.mode.style
+        """Who JARVIS is, how this mode thinks, and code mode on top.
+
+        The identity block is never dropped. Code mode replaces the *butler*
+        persona, not the assistant's sense of self: without this, asking
+        "who created you?" in code mode got "I am Mercury, trained by
+        Inception" — the model's own identity, leaking straight through.
+        """
+        if self.persona_override:
+            parts = [JARVIS_IDENTITY, self.persona_override]
+        else:
+            parts = [JARVIS_SYSTEM_PROMPT]
+        parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
+        return "\n\n".join(parts)
 
     def set_mode(self, name: str):
         """Switch thinking mode. Clears cooldowns so the new mode gets a clean go."""
@@ -118,26 +138,22 @@ class Brain:
                 break
         return stripped
 
-    def _system_prompt(self) -> str:
-        """Persona, plus how this mode should think, plus code mode if on.
-
-        The mode's style is what actually distinguishes Low from Max. Sending
-        it as system text works on every provider, rather than only on the
-        ones that expose a reasoning-effort parameter.
-        """
-        if self.code_mode:
-            # Swap the persona out, don't stack on top of it.
-            parts = [JARVIS_IDENTITY, CODE_MODE_PROMPT]
-        else:
-            parts = [JARVIS_SYSTEM_PROMPT]
-        parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
-        return "\n\n".join(parts)
-
-    def chat(self, user_message: str, extra_context: str | None = None) -> str:
+    def chat(
+        self,
+        user_message: str,
+        extra_context: str | None = None,
+        should_commit: Callable[[], bool] | None = None,
+    ) -> str:
         """Send a message. `extra_context` is prepended for this request only.
 
         Addons use it to inject what they know without that scaffolding piling
         up in the history the user sees.
+
+        `should_commit` is asked, once, whether the finished exchange is still
+        wanted. Pressing Stop makes it return False: the HTTP call cannot be
+        torn down mid-flight, but the answer nobody saw must not end up in the
+        history, where it would be saved to disk and quietly sent as context
+        with the next question.
         """
         sent = f"{extra_context}\n\n{user_message}" if extra_context else user_message
         messages = [
@@ -149,6 +165,9 @@ class Brain:
         reply, error = self._chat_over_chain(messages)
         if reply is None:
             return error or "No AI provider is configured."
+
+        if should_commit is not None and not should_commit():
+            return reply
 
         # Only record the exchange once we actually have a reply, so a failed
         # call can't leave a dangling user turn poisoning the next request.
@@ -214,6 +233,7 @@ class Brain:
         attempts = self._attempts(chain, vision=vision)
         problems: list[str] = []
         for provider, model, timeout, is_preferred in attempts:
+            started = time.monotonic()
             try:
                 reply = self._complete(provider, messages, model, timeout)
             except AuthenticationError as exc:
@@ -255,7 +275,10 @@ class Brain:
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if is_preferred:
                     # Hyperdrive's model going quiet says nothing about the
-                    # provider's ordinary model, which is tried next.
+                    # provider's ordinary model, which is tried next. Don't
+                    # wait on this one again though — one 200-second lesson
+                    # per session is enough.
+                    self._slow_targets.add((provider.name, model))
                     problems.append(
                         f"{provider.label}: '{model}' did not answer "
                         f"({self._short(exc)})"
@@ -272,6 +295,10 @@ class Brain:
             if reply:
                 self._active = provider
                 self._last_model = model
+                security.audit.record(
+                    "answered", f"{provider.label} / {model}",
+                    f"{time.monotonic() - started:.1f}s, {self.mode.label}",
+                )
                 if self.code_mode:
                     reply = self._strip_pleasantry(reply)
                 return reply, None
@@ -303,6 +330,8 @@ class Brain:
             if provider is None or not providers.has_key(provider):
                 continue
             if provider.name in self._dead:
+                continue
+            if (provider.name, model) in self._slow_targets:
                 continue
             if vision and not provider.vision:
                 continue
@@ -409,9 +438,15 @@ class Brain:
         )
 
     def reset_failures(self) -> None:
-        """Forget which providers failed — call after keys change."""
+        """Forget which providers failed — call after keys change.
+
+        A key fixed in Settings is worthless if the provider it belongs to is
+        still marked dead from before the fix, so everything learned the hard
+        way is dropped here, including models that timed out.
+        """
         self._dead.clear()
         self._cooldown.clear()
+        self._slow_targets.clear()
         self._active = None
 
     @staticmethod

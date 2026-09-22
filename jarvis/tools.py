@@ -10,6 +10,8 @@ import webbrowser
 from datetime import datetime
 from typing import Callable
 
+from . import security
+
 ToolHandler = Callable[[str], str]
 
 # Read-only commands only. Anything not on this list is refused.
@@ -89,6 +91,13 @@ def _run_command(args: str) -> str:
             f"Command not allowed: {base}"
             f". Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}"
         )
+
+    # The allow-list says this command is safe in principle; the prompt is
+    # about this particular run. Both matter: the list stops a command that
+    # should never run, the prompt stops one the user did not ask for.
+    if not security.permissions.ask(security.RUN_COMMAND, raw, context="/run"):
+        return f"Denied. '{raw}' was not run."
+    security.audit.record("run", raw)
 
     # dir/echo/date/time have no executable on disk — they only exist inside
     # cmd.exe — so those need an interpreter. Everything else is launched

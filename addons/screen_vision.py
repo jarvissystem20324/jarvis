@@ -15,6 +15,7 @@ import base64
 import io
 from datetime import datetime
 
+from jarvis import security
 from jarvis.addons import Addon, Command
 from jarvis.config import get_output_dir
 
@@ -38,6 +39,14 @@ class ScreenVision(Addon):
 
     @staticmethod
     def _grab():
+        # Whatever is on screen goes to an AI provider, so this asks every
+        # time rather than once — the answer depends on what is showing.
+        if not security.permissions.ask(
+            security.READ_SCREEN, "your whole screen, right now", context="/see"
+        ):
+            raise RuntimeError("Denied. Nothing was captured.")
+        security.audit.record("screen capture", "full screen")
+
         try:
             from PIL import ImageGrab
         except ImportError:

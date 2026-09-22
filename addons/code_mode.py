@@ -17,10 +17,14 @@ different risk from one that talks about it:
 from __future__ import annotations
 
 import difflib
+import json
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
+from jarvis import security
 from jarvis.addons import Addon, Command
 
 CODE_PERSONA = """You are JARVIS in code mode: a senior software engineer
@@ -50,6 +54,12 @@ TEXT_SUFFIXES = {
 }
 MAX_FILE_CHARS = 120_000
 MAX_LISTED = 400
+# A test run that has not finished in five minutes is stuck, not slow.
+TEST_TIMEOUT = 300
+MAX_TEST_OUTPUT = 12_000
+MAX_DIFF_CHARS = 20_000
+# Keep console windows from flashing up behind the GUI on Windows.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class CodeMode(Addon):
@@ -60,15 +70,20 @@ class CodeMode(Addon):
     def __init__(self):
         self.root: Path | None = None
         self.opened: dict[str, str] = {}      # relative path -> contents sent
-        self.last_backup: tuple[Path, Path] | None = None
+        # Every file the last /apply wrote, with the backup it made (None
+        # for a file that did not exist before). /undo walks this.
+        self.backups: list[tuple[Path, Path | None]] = []
 
     def commands(self):
         return [
             Command("project", self.open_project, "Open a project folder", "/project <folder>"),
             Command("files", self.list_files, "List files in the project", "/files [filter]"),
             Command("show", self.show_file, "Read a file into the conversation", "/show <path>"),
-            Command("apply", self.apply, "Write the last proposed file", "/apply"),
+            Command("apply", self.apply, "Write the files I proposed", "/apply [path]"),
             Command("undo", self.undo, "Restore what /apply overwrote", "/undo"),
+            Command("tree", self.tree, "Show the project layout", "/tree"),
+            Command("test", self.run_tests, "Run the tests and diagnose failures", "/test"),
+            Command("diff", self.diff, "Review uncommitted changes", "/diff [raw]"),
         ]
 
     # --- mode -------------------------------------------------------------
@@ -192,6 +207,11 @@ class CodeMode(Addon):
             return f"Couldn't read it: {exc}"
 
         rel = str(path.relative_to(self.root))
+        if not security.permissions.ask(
+            security.READ_FILE, rel, context="/show"
+        ):
+            return f"Denied. {rel} was not read."
+        security.audit.record("show", rel, f"{len(text)} chars")
         self.opened[rel] = text[:MAX_FILE_CHARS]
         return (
             f"Read {rel} — {len(text.splitlines())} lines, {len(text):,} chars. "
@@ -200,59 +220,81 @@ class CodeMode(Addon):
 
     def enrich_prompt(self, ctx, text: str) -> str | None:
         brain = getattr(ctx.jarvis, "brain", None)
-        if not getattr(brain, "code_mode", False) or not self.opened:
+        if not getattr(brain, "code_mode", False) or self.root is None:
             return None
-        blocks = [
-            f"--- {rel} ---\n{body}" for rel, body in list(self.opened.items())[-4:]
-        ]
-        return (
-            f"Files open from {self.root} (use these exact contents):\n\n"
-            + "\n\n".join(blocks)
-        )
+
+        parts: list[str] = []
+        # The layout goes first and always. Without it JARVIS invents plausible
+        # filenames when asked where something lives, because it genuinely has
+        # no idea what else is in the project.
+        layout = self._tree_text(limit=40)
+        if layout:
+            parts.append(f"Project layout ({self.root}):\n{layout}")
+        if self.opened:
+            blocks = [
+                f"--- {rel} ---\n{body}" for rel, body in list(self.opened.items())[-4:]
+            ]
+            parts.append(
+                "Files open (use these exact contents):\n\n" + "\n\n".join(blocks)
+            )
+        return "\n\n".join(parts) if parts else None
 
     # --- writing ----------------------------------------------------------
 
-    def _last_proposal(self, ctx) -> tuple[str, str] | None:
-        """Pull the newest ```<path> block out of the last assistant reply."""
+    @staticmethod
+    def _blocks(content: str) -> list[tuple[str, str]]:
+        """Every ```<path> ... ``` block in a reply, in order.
+
+        A fence is treated as a file only when its info line looks like a
+        path. ```python is a language tag and must not be mistaken for one,
+        which is why a bare word without a dot or slash is ignored.
+        """
+        out: list[tuple[str, str]] = []
+        path: str | None = None
+        body: list[str] = []
+        for line in content.splitlines():
+            if line.lstrip().startswith("```"):
+                info = line.lstrip()[3:].strip().strip("`")
+                if path is None:
+                    looks_like_path = "/" in info or "\\" in info or (
+                        "." in info and not info.startswith(".")
+                    )
+                    if looks_like_path:
+                        path, body = info, []
+                    continue
+                out.append((path, "\n".join(body)))
+                path = None
+                body = []
+            elif path is not None:
+                body.append(line)
+        return out
+
+    def _last_proposals(self, ctx) -> list[tuple[str, str]]:
+        """The file blocks from the newest assistant reply that had any.
+
+        One reply often changes several files — a module and its caller, or a
+        function and its test. Applying only the first was the difference
+        between a coding agent and a code printer.
+        """
         brain = getattr(ctx.jarvis, "brain", None)
         for turn in reversed(getattr(brain, "history", []) or []):
             if turn.get("role") != "assistant":
                 continue
-            lines = (turn.get("content") or "").splitlines()
-            path = None
-            body: list[str] = []
-            found: tuple[str, str] | None = None
-            for line in lines:
-                if line.startswith("```"):
-                    info = line[3:].strip()
-                    if path is None and ("/" in info or "\\" in info or "." in info):
-                        path, body = info, []
-                    elif path is not None:
-                        found = (path, "\n".join(body))
-                        path = None
-                elif path is not None:
-                    body.append(line)
-            if found:
-                return found
-        return None
+            blocks = self._blocks(turn.get("content") or "")
+            if blocks:
+                return blocks
+        return []
 
-    def apply(self, ctx, args: str) -> str:
-        if self.root is None:
-            return "No project open. Use /project <folder> first."
-        proposal = self._last_proposal(ctx)
-        if proposal is None:
-            return (
-                "I can't find a file to write in my last reply. I need a fenced "
-                "block whose first line is the file path, like ```src/app.py"
-            )
-        rel, body = proposal
+    def _write_one(self, rel: str, body: str) -> tuple[str, str | None]:
+        """Write one file. Returns (report line, error) — error wins."""
         path, err = self._resolve(rel)
         if err:
-            return err
+            return "", err
         if not body.strip():
-            return f"The proposed contents for {rel} are empty — refusing to write that."
+            return "", f"The proposed contents for {rel} are empty — not writing that."
 
         before = ""
+        backup: Path | None = None
         if path.exists():
             try:
                 before = path.read_text(encoding="utf-8", errors="replace")
@@ -263,46 +305,285 @@ class CodeMode(Addon):
             )
             try:
                 shutil.copy2(path, backup)
-                self.last_backup = (path, backup)
             except OSError as exc:
-                return f"Couldn't back up {rel} first, so I did not write: {exc}"
-        else:
-            self.last_backup = (path, None)  # type: ignore[assignment]
+                return "", f"Couldn't back up {rel} first, so I did not write it: {exc}"
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body.rstrip() + "\n", encoding="utf-8")
         except OSError as exc:
-            return f"Write failed: {exc}"
+            return "", f"Write failed for {rel}: {exc}"
 
+        self.backups.append((path, backup))
         diff = list(difflib.unified_diff(
-            before.splitlines(), body.splitlines(),
-            fromfile=f"{rel} (before)", tofile=f"{rel} (after)", lineterm="", n=1,
+            before.splitlines(), body.splitlines(), lineterm="", n=0,
         ))
         added = sum(1 for d in diff if d.startswith("+") and not d.startswith("+++"))
         removed = sum(1 for d in diff if d.startswith("-") and not d.startswith("---"))
-        preview = "\n".join(diff[:24])
-        tail = f"\n  ... {len(diff) - 24} more diff lines" if len(diff) > 24 else ""
+        what = "new file" if backup is None else f"backup {backup.name}"
+        return f"  {rel}  (+{added} / -{removed})  — {what}", None
+
+    def apply(self, ctx, args: str) -> str:
+        if self.root is None:
+            return "No project open. Use /project <folder> first."
+        proposals = self._last_proposals(ctx)
+        if not proposals:
+            return (
+                "I can't find a file to write in my last reply. I need a fenced "
+                "block whose info line is the file path, like ```src/app.py"
+            )
+
+        wanted = args.strip().strip('"').strip("'")
+        if wanted:
+            proposals = [(r, b) for r, b in proposals if r == wanted or r.endswith(wanted)]
+            if not proposals:
+                offered = ", ".join(r for r, _ in self._last_proposals(ctx))
+                return f"'{wanted}' wasn't one of the files I proposed. I offered: {offered}"
+
+        # Last block wins if a file appears twice, and nothing is written until
+        # every path has been checked — a half-applied change is worse than none.
+        latest: dict[str, str] = {}
+        for rel, body in proposals:
+            latest[rel] = body
+        for rel in latest:
+            _, err = self._resolve(rel)
+            if err:
+                return f"Nothing was written. {err}"
+
+        names = ", ".join(latest)
+        if not security.permissions.ask(
+            security.WRITE_FILE, f"{len(latest)} file(s) in {self.root.name}: {names}",
+            context="/apply",
+        ):
+            return f"Denied. Nothing was written."
+        security.audit.record("apply", names, f"{len(latest)} file(s)")
+
+        self.backups = []
+        lines: list[str] = []
+        for rel, body in latest.items():
+            report, err = self._write_one(rel, body)
+            if err:
+                undone = self._restore_all()
+                return f"{err}\n\n{undone}"
+            lines.append(report)
+
+        count = len(lines)
         return (
-            f"Wrote {rel}  (+{added} / -{removed} lines)\n"
-            f"{'Backup: ' + self.last_backup[1].name if self.last_backup[1] else 'New file.'}"
-            f"  —  /undo restores it\n\n{preview}{tail}"
+            f"Wrote {count} file{'s' if count != 1 else ''}:\n"
+            + "\n".join(lines)
+            + "\n\n/undo restores all of them."
         )
 
+    def _restore_all(self) -> str:
+        """Put every file this /apply touched back the way it was."""
+        if not self.backups:
+            return "Nothing had been written yet."
+        restored: list[str] = []
+        failed: list[str] = []
+        for path, backup in reversed(self.backups):
+            try:
+                if backup is None:
+                    path.unlink(missing_ok=True)
+                    restored.append(f"removed {path.name}")
+                else:
+                    shutil.copy2(backup, path)
+                    restored.append(f"restored {path.name}")
+            except OSError as exc:
+                failed.append(f"{path.name}: {exc}")
+        self.backups = []
+        text = "Rolled back: " + ", ".join(restored) if restored else ""
+        if failed:
+            text += "\nCould NOT roll back: " + "; ".join(failed)
+        return text
+
     def undo(self, ctx, args: str) -> str:
-        if not self.last_backup:
+        if not self.backups:
             return "Nothing to undo — I haven't written anything this session."
-        path, backup = self.last_backup
+        return self._restore_all()
+
+    # --- running the project ---------------------------------------------
+
+    def _detect_test_command(self) -> tuple[list[str], str] | None:
+        """Work out how this project runs its tests. Nothing else is run."""
+        if self.root is None:
+            return None
+        root = self.root
+
+        if (root / "pytest.ini").exists() or (root / "tests").is_dir() or \
+                any(root.glob("test_*.py")) or any(root.glob("*_test.py")):
+            python = self._project_python()
+            return [python, "-m", "pytest", "-q", "--tb=short"], "pytest"
+
+        package = root / "package.json"
+        if package.is_file():
+            try:
+                scripts = json.loads(package.read_text(encoding="utf-8")).get("scripts", {})
+            except (json.JSONDecodeError, OSError):
+                scripts = {}
+            if "test" in scripts:
+                return ["npm", "test", "--silent"], "npm test"
+
+        if (root / "Cargo.toml").is_file():
+            return ["cargo", "test"], "cargo test"
+        if (root / "go.mod").is_file():
+            return ["go", "test", "./..."], "go test"
+        return None
+
+    def _project_python(self) -> str:
+        """The project's own interpreter if it has one, else ours."""
+        if self.root is not None:
+            for candidate in (
+                self.root / "venv" / "Scripts" / "python.exe",
+                self.root / ".venv" / "Scripts" / "python.exe",
+                self.root / "venv" / "bin" / "python",
+                self.root / ".venv" / "bin" / "python",
+            ):
+                if candidate.is_file():
+                    return str(candidate)
+        return sys.executable
+
+    def run_tests(self, ctx, args: str) -> str:
+        """Run the project's tests and, if they fail, work out why.
+
+        Only a recognised test runner is ever executed, and only inside the
+        folder you opened — this is not a general 'run anything' command.
+        """
+        if self.root is None:
+            return "No project open. Use /project <folder> first."
+        detected = self._detect_test_command()
+        if detected is None:
+            return (
+                "I can't tell how this project runs its tests. I look for "
+                "pytest (a tests/ folder or test_*.py), an npm 'test' script, "
+                "Cargo.toml, or go.mod."
+            )
+        command, label = detected
+        if not security.permissions.ask(
+            security.RUN_TESTS, f"{' '.join(command)}  (in {self.root})",
+            context="/test",
+        ):
+            return "Denied. The tests were not run."
+        security.audit.record("test", " ".join(command))
+
         try:
-            if backup is None:
-                path.unlink(missing_ok=True)
-                self.last_backup = None
-                return f"Removed {path.name} — it was newly created."
-            shutil.copy2(backup, path)
-            self.last_backup = None
-            return f"Restored {path.name} from {backup.name}."
+            proc = subprocess.run(
+                command, cwd=str(self.root), capture_output=True, text=True,
+                timeout=TEST_TIMEOUT, encoding="utf-8", errors="replace",
+                creationflags=NO_WINDOW,
+            )
+        except FileNotFoundError:
+            return f"{label} isn't installed, or isn't on PATH."
+        except subprocess.TimeoutExpired:
+            return f"{label} was still running after {TEST_TIMEOUT}s, so I stopped it."
         except OSError as exc:
-            return f"Undo failed: {exc}"
+            return f"Couldn't run {label}: {exc}"
+
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        trimmed = output[-MAX_TEST_OUTPUT:]
+        if len(output) > MAX_TEST_OUTPUT:
+            trimmed = "...(earlier output trimmed)...\n" + trimmed
+
+        if proc.returncode == 0:
+            tail = "\n".join(trimmed.splitlines()[-6:])
+            return f"{label}: everything passed.\n\n{tail}"
+
+        verdict = ctx.ask(
+            "These tests just failed. Say which test failed and why, then the "
+            "smallest change that would fix it. If the output does not say "
+            "enough, name the file you need to see. Be brief.\n\n"
+            f"Command: {' '.join(command)}\nExit code: {proc.returncode}\n\n"
+            f"{trimmed}"
+        )
+        tail = "\n".join(trimmed.splitlines()[-16:])
+        return (
+            f"{label} failed (exit {proc.returncode}).\n\n{verdict}\n\n"
+            f"--- last lines of output ---\n{tail}"
+        )
+
+    def diff(self, ctx, args: str) -> str:
+        """Show what has changed in the working tree, and review it."""
+        if self.root is None:
+            return "No project open. Use /project <folder> first."
+        if not (self.root / ".git").exists():
+            return f"{self.root.name} isn't a git repository, so there's nothing to diff."
+
+        status = self._git("status", "--short")
+        if status is None:
+            return "git isn't installed, or isn't on PATH."
+        if not status.strip():
+            return "The working tree is clean — nothing changed since the last commit."
+
+        patch = self._git("diff") or ""
+        staged = self._git("diff", "--cached") or ""
+        combined = (patch + "\n" + staged).strip()
+        if not combined:
+            return (
+                "Files are added or removed, but nothing has a text diff yet:\n\n"
+                + status
+            )
+
+        trimmed = combined[:MAX_DIFF_CHARS]
+        note = "\n...(diff trimmed)..." if len(combined) > MAX_DIFF_CHARS else ""
+
+        if args.strip().lower() in {"show", "raw"}:
+            return f"Changes in {self.root.name}:\n\n{status}\n{trimmed}{note}"
+
+        review = ctx.ask(
+            "Review this diff as a careful colleague. Say what it changes, then "
+            "anything that looks wrong: bugs, cases not handled, things the "
+            "change breaks elsewhere. If it looks fine, say so plainly and "
+            "briefly. Do not restate the diff.\n\n"
+            f"{status}\n\n{trimmed}{note}"
+        )
+        files = len([line for line in status.splitlines() if line.strip()])
+        return f"{files} file{'s' if files != 1 else ''} changed.\n\n{review}"
+
+    def _git(self, *args: str) -> str | None:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(self.root), *args],
+                capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.stdout or ""
+
+    def tree(self, ctx, args: str) -> str:
+        """The project's shape, as a tree."""
+        if self.root is None:
+            return "No project open. Use /project <folder> first."
+        text = self._tree_text()
+        if not text:
+            return "No readable files in that folder."
+        return f"{self.root}\n{text}"
+
+    def _tree_text(self, limit: int = 120) -> str:
+        """Directories and their file counts, deepest paths folded away.
+
+        A flat list of 400 paths tells the model less than the shape does, and
+        costs far more context.
+        """
+        files = self._walk()
+        if not files:
+            return ""
+        groups: dict[str, list[str]] = {}
+        for f in files:
+            rel = f.relative_to(self.root)
+            folder = str(rel.parent) if str(rel.parent) != "." else ""
+            groups.setdefault(folder, []).append(rel.name)
+
+        lines: list[str] = []
+        for folder in sorted(groups):
+            names = sorted(groups[folder])
+            head = f"{folder}/" if folder else "(root)"
+            shown = ", ".join(names[:8])
+            more = f", +{len(names) - 8} more" if len(names) > 8 else ""
+            lines.append(f"  {head}  [{len(names)}]  {shown}{more}")
+            if len(lines) >= limit:
+                lines.append(f"  ... {len(groups) - limit} more folders")
+                break
+        return "\n".join(lines)
 
 
 ADDON = CodeMode()
