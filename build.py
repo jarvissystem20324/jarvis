@@ -190,6 +190,30 @@ def write_manifest() -> None:
 
     windows_url = existing.get("url", "https://REPLACE-ME/JARVIS.exe")
 
+    def _release_notes(previous: dict) -> str:
+        """This version's notes, from release/NOTES.md.
+
+        Carrying the old manifest's notes forward was silent and wrong: the
+        3.1 manifest was built with 3.0's text still in it, so the update
+        dialog would have described the wrong release to everyone who
+        clicked it. One file is the source of truth, and a stale one is
+        called out rather than shipped.
+        """
+        path = Path(__file__).parent / "release" / "NOTES.md"
+        if path.is_file():
+            text = path.read_text(encoding="utf-8").strip()
+            first = text.splitlines()[0] if text else ""
+            if __version__ in first:
+                return text
+            print(
+                f"  WARNING: release/NOTES.md says '{first}', not {__version__}.\n"
+                f"           Update it, or the update dialog will describe the "
+                f"wrong release."
+            )
+        else:
+            print("  WARNING: no release/NOTES.md — the update dialog will be bare.")
+        return previous.get("notes", f"JARVIS {__version__}")
+
     # Keep the flat url/sha256 at the top level: every release published so far
     # looks like that, and clients already in the wild read only those fields.
     # New clients prefer the per-platform block, which is what stops a Mac
@@ -203,7 +227,7 @@ def write_manifest() -> None:
                 "version": __version__,
                 "url": windows_url,
                 "sha256": digest,
-                "notes": existing.get("notes", f"JARVIS {__version__}"),
+                "notes": _release_notes(existing),
                 "platforms": platforms,
             },
             indent=2,
