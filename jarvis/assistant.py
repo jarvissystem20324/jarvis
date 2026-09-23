@@ -74,10 +74,18 @@ class Jarvis:
         )
 
     def process(
-        self, user_input: str, should_commit: Callable[[], bool] | None = None
+        self,
+        user_input: str,
+        should_commit: Callable[[], bool] | None = None,
+        on_chunk: Callable[[str | None], None] | None = None,
     ) -> JarvisResponse:
-        """Handle one input. `should_commit` lets the caller disown a
-        finished exchange — see Brain.chat."""
+        """Handle one input.
+
+        `should_commit` lets the caller disown a finished exchange and
+        `on_chunk` receives the answer as it streams — both are passed
+        straight through to Brain.chat. Commands never stream: they are
+        answered here, whole, without reaching a provider.
+        """
         text = (user_input or "").strip()
         if not text:
             return JarvisResponse(text="I didn't catch that. Could you repeat?")
@@ -150,6 +158,15 @@ class Jarvis:
             if name == "sandbox":
                 return JarvisResponse(text=self.sandbox(args))
 
+            if name == "bench":
+                return JarvisResponse(text=self.bench(args))
+
+            if name == "compare":
+                return JarvisResponse(text=self.compare(args))
+
+            if name in {"chat", "chats"}:
+                return JarvisResponse(text=self.chats(args if name == "chat" else ""))
+
             # Addons are dispatched before the offline tools so they can add
             # new commands. They cannot capture a built-in: the loader refuses
             # to register anything in RESERVED_COMMANDS.
@@ -172,10 +189,232 @@ class Jarvis:
             text,
             extra_context=self.addons.context_for(text) or None,
             should_commit=should_commit,
+            on_chunk=on_chunk,
         )
         self.addons.notify_reply(text, reply)
         self._maybe_speak(reply)
         return JarvisResponse(text=reply)
+
+    # --- measuring and comparing ------------------------------------------
+
+    # Generous on purpose. Several of these models think before they write,
+    # and at 400 tokens mercury-2.5 returned nothing at all while
+    # gemini-3.6-flash was cut off mid-sentence — which makes a comparison
+    # actively misleading rather than merely short.
+    PROBE_TOKENS = 2048
+
+    def _probe(self, provider, model: str, prompt: str, timeout: float):
+        """One timed request. Returns (ok, seconds, text_or_reason)."""
+        import time
+
+        started = time.time()
+        try:
+            if provider.transport == "http":
+                text = providers.pollinations_chat(model, [
+                    {"role": "user", "content": prompt}
+                ])
+                return True, time.time() - started, text
+
+            client = providers.get_client(provider).with_options(
+                timeout=timeout, max_retries=0
+            )
+            messages = [{"role": "user", "content": prompt}]
+            last: Exception | None = None
+            # Providers disagree about which of these they accept, and Gemini
+            # honours them differently, so try both rather than guess.
+            for param in ("max_tokens", "max_completion_tokens"):
+                try:
+                    reply = client.chat.completions.create(
+                        model=model, messages=messages, **{param: self.PROBE_TOKENS}
+                    )
+                except Exception as exc:
+                    last = exc
+                    continue
+                choice = reply.choices[0]
+                text = (choice.message.content or "").strip()
+                if text:
+                    return True, time.time() - started, text
+                if getattr(choice, "finish_reason", "") != "length":
+                    return True, time.time() - started, ""
+            if last is not None:
+                raise last
+            return False, time.time() - started, "answered with nothing"
+        except Exception as exc:
+            return False, time.time() - started, self.brain._short(exc)
+
+    def bench(self, args: str) -> str:
+        """Time every provider, so a dead one is obvious before it matters.
+
+        Three separate failures this project hit — a retired model, a revoked
+        key, a model that accepts requests and never answers — all looked
+        identical from inside a conversation: JARVIS just got slower or
+        quieter. This asks every backend the same trivial question and says
+        plainly which ones are alive and how fast.
+        """
+        import concurrent.futures as futures
+
+        prompt = args.strip() or "Reply with exactly: OK"
+        targets: list[tuple] = []
+        seen: set[tuple[str, str]] = set()
+
+        # Whatever the modes reach for, plus each provider's own default.
+        for mode in modes.ALL:
+            for pname, model in modes.targets_for(mode):
+                provider = providers.BY_NAME.get(pname)
+                if provider and providers.has_key(provider) and (pname, model) not in seen:
+                    targets.append((mode.label, provider, model))
+                    seen.add((pname, model))
+        for provider in providers.chat_chain():
+            model = providers.model_for(provider)
+            if (provider.name, model) not in seen:
+                targets.append(("—", provider, model))
+                seen.add((provider.name, model))
+
+        if not targets:
+            return "No providers are configured, so there is nothing to measure."
+
+        security.audit.record("bench", f"{len(targets)} models")
+
+        def run(entry):
+            label, provider, model = entry
+            ok, secs, text = self._probe(provider, model, prompt, timeout=45)
+            return label, provider, model, ok, secs, text
+
+        with futures.ThreadPoolExecutor(max_workers=5) as pool:
+            rows = list(pool.map(run, targets))
+
+        alive = [r for r in rows if r[3]]
+        alive.sort(key=lambda r: r[5])
+        dead = [r for r in rows if not r[3]]
+
+        lines = [f"Benchmark — {len(alive)} of {len(rows)} answered"]
+        if alive:
+            lines.append("")
+            lines.append(f"  {'MODE':11} {'MODEL':38} {'TIME':>7}")
+            for label, provider, model, _ok, secs, _t in alive:
+                lines.append(f"  {label:11} {model[:38]:38} {secs:6.1f}s")
+        if dead:
+            lines.append("")
+            lines.append("  Did not answer:")
+            for label, provider, model, _ok, secs, why in dead:
+                lines.append(f"    {model[:38]:38} {why[:40]}  ({secs:.0f}s)")
+            lines.append("")
+            lines.append(
+                "  A mode whose model is listed here still works — it falls "
+                "through to the provider chain."
+            )
+        return "\n".join(lines)
+
+    def compare(self, args: str) -> str:
+        """Ask several models the same question and show the answers together.
+
+        Useful for deciding what a tier should use, and for showing someone
+        why the failover chain is not just redundancy — the models genuinely
+        differ.
+        """
+        import concurrent.futures as futures
+
+        question = args.strip()
+        if not question:
+            return (
+                "Usage: /compare <question>\n"
+                "Asks Low, Mid, High and Max's models the same thing and puts "
+                "the answers side by side."
+            )
+
+        targets: list[tuple[str, object, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for mode in (modes.LOW, modes.MID, modes.HIGH, modes.MAX):
+            for pname, model in modes.targets_for(mode):
+                provider = providers.BY_NAME.get(pname)
+                if provider and providers.has_key(provider) and (pname, model) not in seen:
+                    targets.append((mode.label, provider, model))
+                    seen.add((pname, model))
+                break  # one model per tier is enough to compare
+        if not targets:
+            return "No configured models to compare."
+
+        security.audit.record("compare", f"{len(targets)} models")
+
+        def run(entry):
+            label, provider, model = entry
+            ok, secs, text = self._probe(provider, model, question, timeout=60)
+            return label, provider, model, ok, secs, text
+
+        with futures.ThreadPoolExecutor(max_workers=4) as pool:
+            rows = list(pool.map(run, targets))
+
+        blocks = [f"Same question, {len(rows)} models:\n"]
+        for label, provider, model, ok, secs, text in rows:
+            head = f"── {label}  ·  {provider.label} {model}  ·  {secs:.1f}s"
+            body = text.strip() if ok else f"[failed: {text}]"
+            blocks.append(f"{head}\n{body}")
+        return "\n\n".join(blocks)
+
+    # --- conversations ----------------------------------------------------
+
+    def chats(self, args: str) -> str:
+        """List, switch, create or delete named conversations."""
+        parts = args.strip().split(maxsplit=1)
+        verb = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if not verb or verb == "list":
+            saved = history.list_chats()
+            here = history.current_name()
+            # A conversation you have just started has nothing on disk yet.
+            # Leaving it out of its own list reads like it does not exist.
+            if here not in {c["name"] for c in saved}:
+                saved.insert(0, {
+                    "name": here,
+                    "saved": "",
+                    "exchanges": len(self.brain.history) // 2,
+                })
+            if not saved:
+                return "Only this conversation so far. /chat new <name> starts another."
+            lines = [f"Conversations ({len(saved)}):"]
+            for item in saved:
+                mark = ">" if item["name"] == here else " "
+                when = item["saved"][:16].replace("T", " ") or "never saved"
+                lines.append(
+                    f"  {mark} {item['name']:<24} {item['exchanges']:>3} exchanges   {when}"
+                )
+            lines.append("")
+            lines.append("/chat <name> to switch, /chat new <name>, /chat delete <name>")
+            return "\n".join(lines)
+
+        if verb == "new":
+            name = rest or f"chat-{len(history.list_chats()) + 1}"
+            self.save_history()
+            history.set_current(name)
+            self.brain.clear_history()
+            return f"Started '{name}'. The previous conversation is saved and /chat lists them."
+
+        if verb == "delete":
+            if not rest:
+                return "Usage: /chat delete <name>"
+            if rest == history.current_name():
+                return (
+                    f"'{rest}' is the conversation you are in. Switch to another "
+                    "one first, then delete it."
+                )
+            if history.delete_chat(rest):
+                return f"Deleted '{rest}'."
+            return f"There is no conversation called '{rest}'."
+
+        # Anything else is a name to switch to.
+        target = args.strip()
+        known = {c["name"] for c in history.list_chats()}
+        if target not in known:
+            return (
+                f"No conversation called '{target}'.\n"
+                f"Known: {', '.join(sorted(known)) or 'none'}\n"
+                f"Start it with /chat new {target}"
+            )
+        self.save_history()
+        history.set_current(target)
+        note = self.restore_history()
+        return f"Switched to '{target}'. {note or 'It is empty.'}"
 
     # --- security ---------------------------------------------------------
 
@@ -466,6 +705,7 @@ class Jarvis:
         """Reload the previous conversation. Returns a note, or ''."""
         messages, mode, code_mode = history.load()
         if not messages:
+            self.brain.clear_history()
             return ""
         self.brain.history = messages
         if mode:

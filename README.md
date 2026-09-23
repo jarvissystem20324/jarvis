@@ -1,4 +1,4 @@
-# JARVIS 3.1
+# JARVIS 3.3
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -77,11 +77,15 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/quit` | Exit |
 | `/export` | Save the conversation as Markdown |
 | `/retry [provider]` | Ask the last question again, optionally elsewhere |
-| `/mode <tier>` | Low, Mid, High, Max, Hyperdrive or Security |
+| `/mode <tier>` | Low, Mid, High, Max, Hyperdrive or Security — each on its own model |
 | `/code` | Toggle the coding agent |
 | `/find <text>` | Search this conversation (Ctrl+F) |
 | `/copy [code]` | Copy the last reply, or just its code block |
 | `/keys` | List the keyboard shortcuts |
+| `/bench [prompt]` | Time every model and say which ones are alive |
+| `/compare <question>` | Ask Low, Mid, High and Max the same thing, side by side |
+| `/chats` | List conversations |
+| `/chat <name>` | Switch. Also `/chat new <name>`, `/chat delete <name>` |
 
 ### Security
 
@@ -116,6 +120,47 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 
 `/see` and `/read` need a provider that accepts images — Gemini or OpenAI.
 Groq's text models don't.
+
+## Thinking modes
+
+Each tier reaches for its own model, picked by measuring what these free
+tiers actually serve rather than by what sounds impressive:
+
+| Mode | Model | Typical |
+| --- | --- | --- |
+| **Low** | Groq `qwen/qwen3.8-27b` | ~2s |
+| **Mid** | Inception `mercury-2.5` | ~2s |
+| **High** | Gemini `gemini-3.6-flash` | ~9s |
+| **Max** | NVIDIA `nemotron-3-super-120b-a12b` | ~4s |
+| **Hyperdrive** | kimi-k3, falling back to the 120B | 40s once, then ~2s |
+| **Security** | Groq `openai/gpt-oss-120b` | ~2s |
+
+A target is a *preference*. If the key is missing or the model is retired,
+that tier falls through to the normal provider chain and still answers.
+
+Any tier can be re-pointed without a new release, from Settings or by hand:
+
+```
+JARVIS_MODE_HIGH=groq:openai/gpt-oss-120b
+```
+
+`/bench` shows which models are actually answering right now, which is how
+these were chosen in the first place.
+
+**Watch out for reasoning models.** Several of these spend their token
+budget thinking before they write anything. `openai/gpt-oss-20b` was the
+first pick for Low and had to be dropped: at Low's 512-token budget it
+produced 2,276 characters of reasoning and zero characters of answer.
+JARVIS now notices an empty reply that ran out of room and retries with a
+larger budget, so a model like that degrades to slow rather than silent.
+
+Hyperdrive is honest about a disappointment: `moonshotai/kimi-k3` is listed in
+NVIDIA's catalogue but has never once replied on the free tier — measured at
+40, 60 and 200 seconds — and `deepseek-v4.1-flash` and `mistral-nemotron`
+behave identically, so it is the tier and not the model. Hyperdrive still
+reaches for it first, on a 30-second leash, then remembers it timed out and
+skips it for the rest of the session. First message can cost 40 seconds; every
+one after is as fast as Max.
 
 ## Security
 

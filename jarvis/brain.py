@@ -38,6 +38,23 @@ COOLDOWN_SECONDS = 75.0
 ERROR_COOLDOWN_SECONDS = 20.0
 
 
+class _NeedsMoreRoom(Exception):
+    """The model used its whole budget thinking and never answered.
+
+    Reasoning models spend tokens before they write a word, so a budget
+    that suits an ordinary model can produce a completely empty reply.
+    Raised internally so the request can be retried with more room.
+    """
+
+
+class Cancelled(Exception):
+    """Raised by an on_chunk callback to abandon a stream in progress.
+
+    Distinct from a provider failing: the chain must not try the next
+    backend, because the user asked for the whole thing to stop.
+    """
+
+
 class Brain:
     def __init__(self, model: str | None = None):
         self.history: list[dict[str, str]] = []
@@ -143,6 +160,7 @@ class Brain:
         user_message: str,
         extra_context: str | None = None,
         should_commit: Callable[[], bool] | None = None,
+        on_chunk: Callable[[str | None], None] | None = None,
     ) -> str:
         """Send a message. `extra_context` is prepended for this request only.
 
@@ -154,6 +172,12 @@ class Brain:
         torn down mid-flight, but the answer nobody saw must not end up in the
         history, where it would be saved to disk and quietly sent as context
         with the next question.
+
+        `on_chunk` receives the answer as it arrives. It is called with None
+        when a provider fails partway through and the next one is about to
+        start, which tells the caller to throw away what it has shown — the
+        alternative is two half-answers stitched together on screen. Raising
+        Cancelled from it stops the stream.
         """
         sent = f"{extra_context}\n\n{user_message}" if extra_context else user_message
         messages = [
@@ -162,7 +186,7 @@ class Brain:
             {"role": "user", "content": sent},
         ]
 
-        reply, error = self._chat_over_chain(messages)
+        reply, error = self._chat_over_chain(messages, on_chunk=on_chunk)
         if reply is None:
             return error or "No AI provider is configured."
 
@@ -213,7 +237,10 @@ class Brain:
         return chain
 
     def _chat_over_chain(
-        self, messages: list[dict], vision: bool = False
+        self,
+        messages: list[dict],
+        vision: bool = False,
+        on_chunk: Callable[[str | None], None] | None = None,
     ) -> tuple[str | None, str | None]:
         chain = self._chain(vision=vision)
         if not chain:
@@ -232,10 +259,30 @@ class Brain:
         # the fallback for good.
         attempts = self._attempts(chain, vision=vision)
         problems: list[str] = []
+        shown = False
         for provider, model, timeout, is_preferred in attempts:
+            # A previous provider may have streamed part of an answer before
+            # failing. Clear it before this one starts, or the two get stitched
+            # together on screen into something neither model said. Done here,
+            # once, rather than in each of the eight failure branches below.
+            if shown and on_chunk is not None:
+                on_chunk(None)
+                shown = False
+
             started = time.monotonic()
             try:
-                reply = self._complete(provider, messages, model, timeout)
+                def chunk(text: str) -> None:
+                    nonlocal shown
+                    shown = True
+                    if on_chunk is not None:
+                        on_chunk(text)
+
+                reply = self._complete(
+                    provider, messages, model, timeout,
+                    on_chunk=chunk if on_chunk is not None else None,
+                )
+            except Cancelled:
+                raise
             except AuthenticationError as exc:
                 # A rejected key won't start working mid-session.
                 self._dead.add(provider.name)
@@ -325,7 +372,7 @@ class Brain:
         out: list[tuple[Provider, str, float | None, bool]] = []
         seen: set[tuple[str, str]] = set()
 
-        for name, model in self.mode.targets:
+        for index, (name, model) in enumerate(modes.targets_for(self.mode)):
             provider = providers.BY_NAME.get(name)
             if provider is None or not providers.has_key(provider):
                 continue
@@ -335,7 +382,13 @@ class Brain:
                 continue
             if vision and not provider.vision:
                 continue
-            timeout = self.mode.first_target_timeout or self.mode.timeout
+            # The long leash belongs to the first target alone. Giving it to
+            # every preferred model turned Hyperdrive's one slow attempt into
+            # as many slow attempts as it has targets.
+            if index == 0 and self.mode.first_target_timeout:
+                timeout = self.mode.first_target_timeout
+            else:
+                timeout = min(self.mode.timeout, self.mode.fallback_timeout)
             out.append((provider, model, timeout, True))
             seen.add((provider.name, model))
 
@@ -354,10 +407,17 @@ class Brain:
         messages: list[dict],
         model: str | None = None,
         timeout: float | None = None,
+        on_chunk: Callable[[str], None] | None = None,
     ) -> str:
         model = model or self._model_override or providers.model_for(provider)
         if provider.transport == "http":
-            return providers.pollinations_chat(model, messages)
+            # Hand-rolled transport, no streaming. The answer arrives whole;
+            # hand it over as one chunk so the caller's display path is the
+            # same either way.
+            text = providers.pollinations_chat(model, messages)
+            if on_chunk is not None and text:
+                on_chunk(text)
+            return text
 
         token_param = self._token_param.get(provider.name, "max_completion_tokens")
 
@@ -368,6 +428,11 @@ class Brain:
         }
         if provider.name not in self._no_temperature:
             kwargs["temperature"] = self.mode.temperature
+
+        # Streaming is decided before the request, not after: asking once and
+        # then asking again to stream would send every message twice.
+        if on_chunk is not None:
+            kwargs["stream"] = True
 
         client = providers.get_client(provider)
         if timeout is not None:
@@ -394,9 +459,40 @@ class Brain:
                 retry.pop("temperature", None)
                 self._no_temperature.add(provider.name)
                 changed = True
+            if self._mentions(exc, "stream"):
+                # A provider that will not stream should still answer.
+                retry.pop("stream", None)
+                on_chunk = None
+                changed = True
             if not changed:
                 raise
             response = client.chat.completions.create(**retry)
+
+        # Nothing has been sent to the caller yet, so a retry above could not
+        # have left half an answer on screen.
+        try:
+            return self._read_reply(response, on_chunk)
+        except _NeedsMoreRoom:
+            pass
+
+        # The model spent its entire budget thinking. Nothing was emitted, so
+        # asking again with more room is safe and is usually all it needs.
+        roomier = dict(kwargs)
+        roomier[token_param] = max(self.mode.max_tokens * 3, 3072)
+        try:
+            return self._read_reply(
+                client.chat.completions.create(**roomier), on_chunk
+            )
+        except _NeedsMoreRoom:
+            return (
+                f"{model} used its whole budget reasoning and never got to an "
+                "answer. Try a shorter question, or a heavier mode."
+            )
+
+    def _read_reply(self, response, on_chunk: Callable[[str], None] | None) -> str:
+        """Turn a response — streamed or not — into text."""
+        if on_chunk is not None:
+            return self._read_stream(response, on_chunk)
 
         choices = getattr(response, "choices", None)
         if not choices:
@@ -404,9 +500,36 @@ class Brain:
         content = choices[0].message.content
         if not content:
             if getattr(choices[0], "finish_reason", "") == "length":
-                return "My response was cut short. Try asking for something shorter."
+                raise _NeedsMoreRoom()
             return ""
         return content.strip()
+
+    @staticmethod
+    def _read_stream(response, on_chunk: Callable[[str], None]) -> str:
+        """Drain a streaming response, handing each piece to `on_chunk`.
+
+        Cancelled is allowed straight out: the user pressed Stop, and the
+        chain must not treat that as this provider failing and try another.
+        """
+        parts: list[str] = []
+        cut_short = False
+        for event in response:
+            choices = getattr(event, "choices", None)
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            piece = getattr(delta, "content", None) if delta else None
+            if getattr(choices[0], "finish_reason", "") == "length":
+                cut_short = True
+            if not piece:
+                continue
+            parts.append(piece)
+            on_chunk(piece)
+
+        text = "".join(parts).strip()
+        if not text and cut_short:
+            raise _NeedsMoreRoom()
+        return text
 
     # --- helpers ----------------------------------------------------------
 

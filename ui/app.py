@@ -14,6 +14,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont
 
 from jarvis import __version__, modes, security
+from jarvis.brain import Cancelled
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
@@ -88,6 +89,7 @@ class JarvisApp(ctk.CTk):
         # The most recent thing JARVIS said, for /copy and the Copy button.
         self._last_reply = ""
         self._find_needle = ""
+        self._streaming = False
 
         # Anything sensitive asks before it happens, and the question has to
         # reach the Tk thread from whichever worker raised it.
@@ -866,6 +868,13 @@ class JarvisApp(ctk.CTk):
         if not self._busy:
             return
         self._request_id += 1          # invalidates any reply still coming
+        if self._streaming:
+            # Close off the half-written message rather than leaving the next
+            # one to run straight into it.
+            self._streaming = False
+            self.chat_log.configure(state="normal")
+            getattr(self.chat_log, "_textbox", self.chat_log).insert("end", "\n\n")
+            self.chat_log.configure(state="disabled")
         self._set_busy(False, "Stopped")
         self._append_message(
             "JARVIS",
@@ -873,6 +882,63 @@ class JarvisApp(ctk.CTk):
             "or try a faster mode.",
             is_user=False,
         )
+
+    # --- streaming --------------------------------------------------------
+
+    def _begin_stream(self) -> None:
+        """Open an empty JARVIS message that chunks will be written into."""
+        self.chat_log.configure(state="normal")
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        textbox.insert("end", "JARVIS:\n", "jarvis")
+        # A mark rather than an index: the text before it can change length
+        # (an error appended, the log trimmed) and a mark moves with it.
+        textbox.mark_set("stream_start", "end-1c")
+        textbox.mark_gravity("stream_start", "left")
+        self._streaming = True
+        self.chat_log.configure(state="disabled")
+
+    def _append_stream(self, piece: str) -> None:
+        if not self._streaming:
+            return
+        self.chat_log.configure(state="normal")
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        textbox.insert("end", piece)
+        self.chat_log.configure(state="disabled")
+        self.chat_log.see("end")
+
+    def _reset_stream(self) -> None:
+        """Throw away a partial answer, because another provider is taking over."""
+        if not self._streaming:
+            return
+        self.chat_log.configure(state="normal")
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        try:
+            textbox.delete("stream_start", "end-1c")
+        except tkinter.TclError:
+            pass
+        self.chat_log.configure(state="disabled")
+
+    def _end_stream(self, text: str) -> None:
+        """Finish the streamed message, or write it whole if nothing streamed."""
+        streamed = self._streaming
+        self._streaming = False
+        if not streamed:
+            self._append_message("JARVIS", text, is_user=False)
+            return
+
+        self.chat_log.configure(state="normal")
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        # What arrived in pieces and what Brain finally returned can differ:
+        # code mode trims a leading pleasantry off the finished text. Replace
+        # the streamed body with the real one so the two never disagree.
+        try:
+            textbox.delete("stream_start", "end-1c")
+        except tkinter.TclError:
+            pass
+        textbox.insert("end", f"{text}\n\n")
+        self.chat_log.configure(state="disabled")
+        self.chat_log.see("end")
+        self._last_reply = text
 
     def _send_chat(self) -> None:
         if self._busy:
@@ -891,13 +957,28 @@ class JarvisApp(ctk.CTk):
             return
 
         token = self._request_id + 1
+        self._begin_stream()
+
+        def on_chunk(piece):
+            # Checked on the worker thread so the stream stops as soon as
+            # Stop is pressed, rather than after the model finishes.
+            if not self._current(token):
+                raise Cancelled()
+            if piece is None:
+                safe_after(self, self._reset_stream)
+            else:
+                safe_after(self, lambda p=piece: self._append_stream(p))
 
         def work():
             try:
                 response = self.jarvis.process(
-                    text, should_commit=lambda: self._current(token)
+                    text,
+                    should_commit=lambda: self._current(token),
+                    on_chunk=on_chunk,
                 )
                 safe_after(self, lambda: self._current(token) and self._handle_response(response))
+            except Cancelled:
+                pass  # Stop already tidied the window up.
             except Exception as exc:
                 message = f"Error: {exc}"
                 traceback.print_exc()
@@ -913,7 +994,7 @@ class JarvisApp(ctk.CTk):
         except Exception:
             pass
         self.refresh_code_mode()
-        self._append_message("JARVIS", response.text, is_user=False)
+        self._end_stream(response.text)
         if response.image_path:
             self.current_image = response.image_path
             self._show_image_preview(response.image_path)
@@ -923,6 +1004,8 @@ class JarvisApp(ctk.CTk):
 
     def _handle_error(self, message: str) -> None:
         self._set_busy(False)
+        self._reset_stream()
+        self._streaming = False
         self._append_message("JARVIS", message, is_user=False)
 
     def _listen(self) -> None:

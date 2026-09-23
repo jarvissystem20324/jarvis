@@ -1,10 +1,17 @@
 """Thinking modes — how hard JARVIS works on an answer.
 
 A mode is three things: which model to reach for first, how much room the
-answer gets, and an instruction describing how to think. The last is what
-actually separates Low from Max — the same model told to be terse and told to
-be exhaustive behaves very differently, and that works on every provider
-rather than only on ones exposing a reasoning-effort knob.
+answer gets, and an instruction describing how to think.
+
+Every tier names a different model, and that is deliberate. Until 3.1.1 only
+Mid and Hyperdrive did, so Low, High and Max all fell to the top of the
+provider chain and answered on the same model with a different prompt — the
+tiers read as a real difference in the UI while being mostly cosmetic
+underneath. The models below were chosen by measuring what these free tiers
+actually serve, cheapest and fastest at the bottom, heaviest at the top.
+
+The instruction still matters, and still works on providers that expose no
+reasoning-effort knob. It is now half the story rather than all of it.
 
 Targets are *preferences*, never requirements. A mode names the models it
 would like, and anything unavailable falls through to the normal provider
@@ -28,8 +35,9 @@ class Mode:
     temperature: float
     # Preferred (provider name, model id), tried in order before the chain.
     targets: tuple[tuple[str, str], ...] = ()
-    # Seconds allowed for the first target specifically. Hyperdrive uses this
-    # to give a very slow model a long leash before moving on.
+    # Seconds allowed for the first target specifically, and only the first:
+    # a mode with several preferred models must not pay the long leash once
+    # per model.
     first_target_timeout: float | None = None
     # Seconds for ordinary requests in this mode.
     timeout: float = 120.0
@@ -53,6 +61,12 @@ LOW = Mode(
     ),
     max_tokens=512,
     temperature=0.3,
+    # Not a reasoning model, deliberately. gpt-oss-20b was the first choice
+    # and had to be dropped: it spends its tokens thinking before it writes,
+    # so at Low's 512-token budget it produced 2,276 characters of reasoning
+    # and *zero* characters of answer. qwen answers in 1.2s with none of
+    # that, which is what this tier is for.
+    targets=(("groq", "qwen/qwen3.8-27b"),),
     timeout=60.0,
     accent="#4ade80",
 )
@@ -87,6 +101,9 @@ HIGH = Mode(
     ),
     max_tokens=3072,
     temperature=0.7,
+    # Measured at ~6s. Heavier than Mid's diffusion model and on a different
+    # provider, so High is not just Mid with a longer prompt.
+    targets=(("gemini", "gemini-3.6-flash"),),
     accent="#f59e0b",
 )
 
@@ -102,6 +119,9 @@ MAX = Mode(
     ),
     max_tokens=6144,
     temperature=0.8,
+    # 120B, ~10s. The heaviest model any of these free tiers will actually
+    # serve — NVIDIA's larger ones accept the request and then never answer.
+    targets=(("nvidia", "nvidia/nemotron-3-super-120b-a12b"),),
     timeout=180.0,
     accent="#f472b6",
 )
@@ -109,16 +129,26 @@ MAX = Mode(
 HYPERDRIVE = Mode(
     name="hyperdrive",
     label="Hyperdrive",
-    blurb="Reaches for kimi-k3 first, waits 200s, then drops back to Max.",
+    blurb="Tries the heaviest models going, and gives up on them quickly.",
     style=MAX.style,
     max_tokens=6144,
     temperature=0.8,
-    # kimi-k3 is enormous and, on NVIDIA's free tier, frequently never
-    # answers at all. It gets one long attempt and then we move on rather
-    # than leaving the user staring at a spinner.
-    targets=(("nvidia", "moonshotai/kimi-k3"),),
-    first_target_timeout=200.0,
-    timeout=200.0,
+    # The 200-second leash was written when kimi-k3 was expected to answer
+    # eventually. It does not: measured at 40s, 60s and 200s, on three
+    # separate occasions, it never replied once — and deepseek-v4.1-flash and
+    # mistral-nemotron behave the same way, so this is NVIDIA's free tier
+    # rather than one bad model. Waiting longer buys nothing.
+    #
+    # So Hyperdrive still reaches for the giant first, but on a short leash,
+    # and Brain remembers a target that timed out for the rest of the
+    # session. In practice: up to 30 seconds once, then never again.
+    targets=(
+        ("nvidia", "moonshotai/kimi-k3"),
+        ("nvidia", "nvidia/nemotron-3-super-120b-a12b"),
+    ),
+    first_target_timeout=30.0,
+    timeout=180.0,
+    fallback_timeout=60.0,
     accent="#a855f7",
 )
 
@@ -141,6 +171,10 @@ SECURITY = Mode(
     ),
     max_tokens=6144,
     temperature=0.4,
+    # The larger of Groq's two, and fast with it. Reviewing code wants
+    # breadth rather than brevity, and this is the biggest model that
+    # answers in seconds rather than tens of them.
+    targets=(("groq", "openai/gpt-oss-120b"),),
     timeout=180.0,
     accent="#ef4444",
 )
@@ -153,6 +187,38 @@ DEFAULT = MID
 def get(name: str | None) -> Mode:
     """Look up a mode, falling back to the default."""
     return BY_NAME.get((name or "").strip().lower(), DEFAULT)
+
+
+def env_key(mode: Mode) -> str:
+    """The .env setting that overrides this mode's model."""
+    return f"JARVIS_MODE_{mode.name.upper()}"
+
+
+def targets_for(mode: Mode) -> tuple[tuple[str, str], ...]:
+    """This mode's models, with any override from .env applied.
+
+    Providers retire models without warning — this project has lost three
+    that way already — and until now the only fix was a new release. A line
+    like
+
+        JARVIS_MODE_HIGH=groq:qwen/qwen3.8-27b
+
+    repoints a tier without touching the code, and the Settings window writes
+    it for you. A malformed value is ignored rather than breaking the mode.
+    """
+    from .config import get_setting
+
+    raw = get_setting(env_key(mode), "").strip()
+    if not raw:
+        return mode.targets
+
+    picked: list[tuple[str, str]] = []
+    for part in raw.split(","):
+        provider, _, model = part.strip().partition(":")
+        provider, model = provider.strip().lower(), model.strip()
+        if provider and model:
+            picked.append((provider, model))
+    return tuple(picked) or mode.targets
 
 
 def next_mode(current: str) -> Mode:

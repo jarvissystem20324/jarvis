@@ -18,7 +18,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from jarvis import providers
+from jarvis import modes, providers
 from jarvis.config import get_base_dir
 
 # (env var, label, where to get one, free?)
@@ -72,7 +72,7 @@ class SettingsWindow(ctk.CTkToplevel):
         super().__init__(parent)
         self.colors = colors
         self.title("JARVIS settings")
-        self.geometry("640x560")
+        self.geometry("660x680")
         self.configure(fg_color=colors["bg"])
         self.transient(parent)
 
@@ -97,6 +97,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
         for env_name, label, where, free in FIELDS:
             self._add_row(body, env_name, label, where, free)
+
+        self._add_model_section(body)
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=24, pady=(0, 18))
@@ -148,6 +150,48 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(line, text="Test", width=64, height=24,
                       fg_color="transparent", hover_color=self.colors["accent_dim"],
                       command=lambda n=env_name: self._test(n)).pack(side="right")
+
+    def _add_model_section(self, parent) -> None:
+        """Let each thinking mode be re-pointed at a different model.
+
+        Providers retire models without notice — this project has lost three
+        that way — and until now the only remedy was a new release. These
+        boxes write JARVIS_MODE_<TIER> into .env, so a dead tier can be fixed
+        in the app in under a minute.
+        """
+        ctk.CTkFrame(parent, height=1, fg_color=self.colors["accent_dim"]).pack(
+            fill="x", padx=10, pady=(18, 10)
+        )
+        ctk.CTkLabel(
+            parent, text="Models per mode", anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=self.colors["accent"],
+        ).pack(anchor="w", padx=12)
+        ctk.CTkLabel(
+            parent,
+            text="provider:model — leave blank for the built-in choice. "
+                 "Use /bench to see which models are actually answering.",
+            font=ctk.CTkFont(size=10), text_color=self.colors["muted"],
+            anchor="w", justify="left", wraplength=520,
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        for mode in modes.ALL:
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", padx=10, pady=3)
+
+            ctk.CTkLabel(
+                row, text=mode.label, width=92, anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=mode.accent,
+            ).pack(side="left")
+
+            builtin = ", ".join(f"{p}:{m}" for p, m in mode.targets) or "the provider chain"
+            entry = ctk.CTkEntry(row, height=30, placeholder_text=builtin)
+            entry.pack(side="left", fill="x", expand=True)
+            existing = self.original.get(modes.env_key(mode), "")
+            if existing:
+                entry.insert(0, existing)
+            self.entries[modes.env_key(mode)] = entry
 
     # --- actions ----------------------------------------------------------
 
@@ -217,7 +261,10 @@ class SettingsWindow(ctk.CTkToplevel):
         return f"failed: {type(exc).__name__}"
 
     def _refresh_summary(self) -> None:
-        filled = sum(1 for e in self.entries.values() if e.get().strip())
+        filled = sum(
+            1 for name, e in self.entries.items()
+            if name.endswith("_API_KEY") and e.get().strip()
+        )
         if filled >= 2:
             self.summary.configure(
                 text=f"{filled} keys configured — a dead one won't stop JARVIS.",
@@ -263,6 +310,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.original = read_env()
 
         for name, state in self.status.items():
+            if name not in self.entries:
+                continue
             has = bool(self.entries[name].get().strip())
             state.configure(text="configured" if has else "not set",
                             text_color=self.colors["ok"] if has

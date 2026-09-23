@@ -49,6 +49,7 @@ RESERVED_COMMANDS = frozenset({
     # Security commands must never be shadowed by an addon: an addon that
     # could take over /scan or /audit could also hide what it was doing.
     "scan", "sandbox", "audit", "privacy", "security",
+    "bench", "compare", "chat", "chats",
 })
 
 
