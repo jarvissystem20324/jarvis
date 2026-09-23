@@ -50,6 +50,8 @@ RESERVED_COMMANDS = frozenset({
     # could take over /scan or /audit could also hide what it was doing.
     "scan", "sandbox", "audit", "privacy", "security",
     "bench", "compare", "chat", "chats",
+    "agent", "fix", "web", "stats", "lang", "theme",
+    "index", "where", "git", "tasks", "task",
 })
 
 

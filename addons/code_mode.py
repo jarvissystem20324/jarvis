@@ -409,10 +409,28 @@ class CodeMode(Addon):
             return None
         root = self.root
 
-        if (root / "pytest.ini").exists() or (root / "tests").is_dir() or \
-                any(root.glob("test_*.py")) or any(root.glob("*_test.py")):
+        looks_like_python_tests = (
+            (root / "pytest.ini").exists()
+            or (root / "tests").is_dir()
+            or any(root.glob("test_*.py"))
+            or any(root.glob("*_test.py"))
+        )
+        if looks_like_python_tests:
             python = self._project_python()
-            return [python, "-m", "pytest", "-q", "--tb=short"], "pytest"
+            # Prefer pytest, but check it is actually importable rather than
+            # assuming. Without this the runner "fails" with an exit code and
+            # no output, and the real reason — pytest is not installed — is
+            # never said out loud.
+            if self._module_available(python, "pytest"):
+                return [python, "-m", "pytest", "-q", "--tb=short"], "pytest"
+            where = "tests" if (root / "tests").is_dir() else "."
+            # -t . matters: without the top-level directory set to the
+            # project root, discovery runs but imports fail and unittest
+            # reports "NO TESTS RAN" rather than an error.
+            return (
+                [python, "-m", "unittest", "discover", "-s", where, "-t", ".", "-v"],
+                "unittest",
+            )
 
         package = root / "package.json"
         if package.is_file():
@@ -428,6 +446,17 @@ class CodeMode(Addon):
         if (root / "go.mod").is_file():
             return ["go", "test", "./..."], "go test"
         return None
+
+    @staticmethod
+    def _module_available(python: str, module: str) -> bool:
+        try:
+            proc = subprocess.run(
+                [python, "-c", f"import {module}"],
+                capture_output=True, timeout=30, creationflags=NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return proc.returncode == 0
 
     def _project_python(self) -> str:
         """The project's own interpreter if it has one, else ours."""

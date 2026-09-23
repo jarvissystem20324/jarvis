@@ -124,6 +124,14 @@ def load_config() -> None:
         load_dotenv()  # fall back to CWD / process env
     _loaded = True
 
+    # Read after the file is loaded, or the setting is never seen.
+    try:
+        from . import i18n
+
+        i18n.load_from_env()
+    except Exception:
+        pass
+
 
 def get_api_key() -> str:
     load_config()

@@ -243,6 +243,62 @@ class Voice:
 
         return self._transcribe(pcm)
 
+    # --- push to talk -----------------------------------------------------
+    # Ordinary listening decides for itself when you have stopped speaking,
+    # which is exactly what goes wrong in a noisy room or when you pause to
+    # think. Push-to-talk removes the guesswork: recording starts when you
+    # press the key and ends when you let go.
+
+    def start_push_to_talk(self) -> bool:
+        """Begin recording. Returns False if the microphone is unavailable."""
+        if not self._mic_ok:
+            return False
+        if getattr(self, "_ptt_stop", None) is not None:
+            return True          # already recording
+
+        self.stop()              # never record our own speech
+        self._ptt_chunks: list[bytes] = []
+        self._ptt_stop = threading.Event()
+
+        def record() -> None:
+            try:
+                with sd.InputStream(
+                    samplerate=MIC_SAMPLE_RATE, channels=1,
+                    dtype="int16", blocksize=BLOCK_SIZE,
+                ) as stream:
+                    limit = MAX_RECORD_SECONDS * MIC_SAMPLE_RATE
+                    captured = 0
+                    while not self._ptt_stop.is_set() and captured < limit:
+                        block, _overflowed = stream.read(BLOCK_SIZE)
+                        self._ptt_chunks.append(bytes(block))
+                        captured += BLOCK_SIZE
+            except Exception:
+                # A microphone that disappears mid-press should end the
+                # recording, not take the window down with it.
+                self._ptt_chunks = []
+
+        self._ptt_thread = threading.Thread(target=record, daemon=True)
+        self._ptt_thread.start()
+        return True
+
+    def stop_push_to_talk(self) -> str | None:
+        """Stop recording and transcribe what was said."""
+        stop = getattr(self, "_ptt_stop", None)
+        if stop is None:
+            return None
+        stop.set()
+        thread = getattr(self, "_ptt_thread", None)
+        if thread is not None:
+            thread.join(timeout=5)
+        self._ptt_stop = None
+
+        pcm = b"".join(getattr(self, "_ptt_chunks", []))
+        self._ptt_chunks = []
+        # Under about a third of a second is a mis-press, not a sentence.
+        if len(pcm) < MIC_SAMPLE_RATE // 3 * 2:
+            return None
+        return self._transcribe(pcm)
+
     def _record(self, duration: float | None = None) -> bytes:
         """Record until the speaker stops, or for a fixed `duration` if given."""
         chunks: list[bytes] = []

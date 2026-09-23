@@ -77,6 +77,12 @@ RUN_TESTS = Capability(
     "run_tests", "Run this project's test suite",
     "Tests are ordinary programs and can do anything your account can.",
 )
+RUN_AGENT = Capability(
+    "run_agent", "Let the agent carry out this plan",
+    "It will do every step below without asking again, and stop if it "
+    "needs to do anything the plan does not list. Stop always works, and "
+    "/undo puts every file back.",
+)
 NETWORK = Capability(
     "network", "Fetch something over the network",
     "JARVIS will download from the address shown.",
@@ -84,7 +90,7 @@ NETWORK = Capability(
 
 ALL_CAPABILITIES = (
     RUN_COMMAND, WRITE_FILE, DELETE_FILE, READ_SCREEN,
-    READ_FILE, SEND_CODE, RUN_TESTS, NETWORK,
+    READ_FILE, SEND_CODE, RUN_TESTS, NETWORK, RUN_AGENT,
 )
 BY_NAME = {c.name: c for c in ALL_CAPABILITIES}
 

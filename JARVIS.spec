@@ -38,6 +38,13 @@ for pkg in ("customtkinter", "sounddevice", "comtypes"):
 
 # httpx/openai verify TLS against certifi's bundle.
 datas += collect_data_files("certifi")
+# tkinterdnd2 ships Tcl binaries that PyInstaller does not find on its
+# own; without them drag-and-drop silently falls back to the button.
+try:
+    datas += collect_data_files("tkinterdnd2")
+    hiddenimports += ["tkinterdnd2"]
+except Exception:
+    pass
 
 a = Analysis(
     ["app.py"],

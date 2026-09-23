@@ -18,7 +18,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from jarvis import modes, providers
+from jarvis import i18n, modes, providers
 from jarvis.config import get_base_dir
 
 # (env var, label, where to get one, free?)
@@ -77,6 +77,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.transient(parent)
 
         self.entries: dict[str, ctk.CTkEntry] = {}
+        # Dropdowns, kept apart from the text boxes because their value
+        # has to be mapped from a label back to a code before saving.
+        self.choices: dict[str, tuple] = {}
         self.status: dict[str, ctk.CTkLabel] = {}
         self.original = read_env()
 
@@ -99,6 +102,7 @@ class SettingsWindow(ctk.CTkToplevel):
             self._add_row(body, env_name, label, where, free)
 
         self._add_model_section(body)
+        self._add_appearance_section(body)
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=24, pady=(0, 18))
@@ -193,6 +197,53 @@ class SettingsWindow(ctk.CTkToplevel):
                 entry.insert(0, existing)
             self.entries[modes.env_key(mode)] = entry
 
+    def _add_appearance_section(self, parent) -> None:
+        """Theme, text size and interface language."""
+        ctk.CTkFrame(parent, height=1, fg_color=self.colors["accent_dim"]).pack(
+            fill="x", padx=10, pady=(18, 10)
+        )
+        ctk.CTkLabel(
+            parent, text="Appearance", anchor="w",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=self.colors["accent"],
+        ).pack(anchor="w", padx=12)
+        ctk.CTkLabel(
+            parent, text="Takes effect when JARVIS restarts.",
+            font=ctk.CTkFont(size=10), text_color=self.colors["muted"], anchor="w",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        from ui import theme
+
+        rows = (
+            ("JARVIS_THEME", "Theme", list(theme.names().values()),
+             {v: k for k, v in theme.names().items()}, theme.names()),
+            ("JARVIS_LANGUAGE", "Language", list(i18n.available().values()),
+             {v: k for k, v in i18n.available().items()}, i18n.available()),
+        )
+        for env_name, label, values, to_code, to_label in rows:
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", padx=10, pady=3)
+            ctk.CTkLabel(row, text=label, width=92, anchor="w",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=self.colors["text"]).pack(side="left")
+            menu = ctk.CTkOptionMenu(row, values=values, width=180)
+            current = self.original.get(env_name, "").strip().lower()
+            menu.set(to_label.get(current, values[0]))
+            menu.pack(side="left")
+            # Stored as the code, shown as the human name.
+            self.choices[env_name] = (menu, to_code)
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=(3, 10))
+        ctk.CTkLabel(row, text="Text size", width=92, anchor="w",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=self.colors["text"]).pack(side="left")
+        sizes = [str(n) for n in range(theme.MIN_FONT, theme.MAX_FONT + 1, 2)]
+        size_menu = ctk.CTkOptionMenu(row, values=sizes, width=90)
+        size_menu.set(self.original.get("JARVIS_FONT_SIZE", str(theme.DEFAULT_FONT)))
+        size_menu.pack(side="left")
+        self.choices["JARVIS_FONT_SIZE"] = (size_menu, None)
+
     # --- actions ----------------------------------------------------------
 
     def _test(self, env_name: str) -> None:
@@ -281,6 +332,11 @@ class SettingsWindow(ctk.CTkToplevel):
             for name, entry in self.entries.items()
             if entry.get().strip() != self.original.get(name, "")
         }
+        for name, (widget, to_code) in self.choices.items():
+            shown = widget.get()
+            value = to_code.get(shown, shown) if to_code else shown
+            if value != self.original.get(name, ""):
+                updates[name] = value
         if not updates:
             self.summary.configure(text="Nothing changed.",
                                    text_color=self.colors["muted"])

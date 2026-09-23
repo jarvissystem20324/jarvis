@@ -135,6 +135,26 @@ def selftest() -> int:
 
     check("security", _security)
 
+    def _dragdrop() -> str:
+        """Drag-and-drop is optional, so report it rather than failing.
+
+        It needs Tcl binaries that PyInstaller does not collect by itself, so
+        this is exactly the kind of thing that works in development and is
+        quietly missing from the build.
+        """
+        try:
+            import tkinterdnd2
+        except ImportError:
+            return "not installed — the Attach button still works"
+        from pathlib import Path as _P
+
+        tcl = _P(tkinterdnd2.__file__).parent / "tkdnd"
+        if not tcl.is_dir():
+            return "package present but its Tcl library is missing"
+        return f"available ({tkinterdnd2.__name__})"
+
+    check("drag and drop", _dragdrop)
+
     from jarvis import config as _cfg
     if getattr(_cfg, "last_env_changes", None):
         for change in _cfg.last_env_changes:

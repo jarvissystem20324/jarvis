@@ -1,4 +1,4 @@
-# JARVIS 3.3
+# JARVIS 4.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -86,6 +86,14 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/compare <question>` | Ask Low, Mid, High and Max the same thing, side by side |
 | `/chats` | List conversations |
 | `/chat <name>` | Switch. Also `/chat new <name>`, `/chat delete <name>` |
+| `/agent <task>` | Plan a job, show it, and carry it out once approved |
+| `/fix` | Run the tests and repair what fails |
+| `/index`, `/where <thing>` | Index the project, then find anything in it |
+| `/git <command>` | Reads are free; add, commit, checkout and push ask |
+| `/web <question\|url>` | Search the web, or read one page |
+| `/stats` | Which providers you use and how fast they are |
+| `/task ...` | Scheduled tasks, while JARVIS is open |
+| `/lang <en\|tr>` | Interface language |
 
 ### Security
 
@@ -161,6 +169,28 @@ behave identically, so it is the tier and not the model. Hyperdrive still
 reaches for it first, on a 30-second leash, then remembers it timed out and
 skips it for the rest of the session. First message can cost 40 seconds; every
 one after is as fast as Max.
+
+## Agent mode
+
+`/agent <what you want done>` plans the job, shows you every file it would
+change and every command it would run, and does nothing until you approve it.
+Then it carries out the whole plan without asking again.
+
+That single approval is the design, not a shortcut. A prompt per action turns
+a ten-step task into ten dialogs, and someone clicking Allow for the tenth
+time is not consenting — they are dismissing. One plan you can actually read
+is safer than ten prompts you cannot.
+
+The plan is a boundary. A file it did not name cannot be written, a path
+outside the open project is refused, and `git push` is not something the agent
+can reach at all — it only ever reads from git. No shell is involved: the
+actions are read, write, test and git, and nothing else exists.
+
+`/fix` points that at your test suite. It runs the tests first, so the plan is
+built against the real failure rather than describing a loop, then repairs the
+cause and re-runs to confirm.
+
+`/undo` reverts everything a run wrote.
 
 ## Security
 

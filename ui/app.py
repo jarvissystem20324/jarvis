@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import re
 import threading
 import tkinter
 import traceback
@@ -18,24 +19,16 @@ from jarvis.brain import Cancelled
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
-from jarvis import updater
+from jarvis import i18n, schedule, updater
+from ui import render, theme
 
-ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-COLORS = {
-    "bg": "#0a0e17",
-    "panel": "#111827",
-    "accent": "#00d4ff",
-    "accent_dim": "#0e7490",
-    "text": "#e2e8f0",
-    "user_bubble": "#1e3a5f",
-    "jarvis_bubble": "#1a2332",
-    "error": "#f87171",
-    "muted": "#64748b",
-    "ok": "#4ade80",
-    "code_bg": "#0d1524",
-}
+PALETTE, THEME_NAME, FONT_SIZE = theme.from_env()
+# Kept as COLORS so every existing reference keeps working; it is now
+# whichever palette the user picked rather than one hardcoded set.
+COLORS = dict(PALETTE)
+ctk.set_appearance_mode(PALETTE["appearance"])
 
 PREVIEW_MAX = 420
 
@@ -90,6 +83,8 @@ class JarvisApp(ctk.CTk):
         self._last_reply = ""
         self._find_needle = ""
         self._streaming = False
+        self._recording = False
+        self._gallery_images: list = []
 
         # Anything sensitive asks before it happens, and the question has to
         # reach the Tk thread from whichever worker raised it.
@@ -106,6 +101,10 @@ class JarvisApp(ctk.CTk):
         self._report_env_migration()
         self._restore_history()
         self.chat_input.focus_set()
+
+        self._enable_drag_and_drop()
+        # Scheduled tasks run only while this window is open, by design.
+        schedule.scheduler.start(self._run_scheduled)
 
         updater.cleanup_previous_update()
         # Quietly look for a new version a moment after the window settles.
@@ -379,6 +378,7 @@ class JarvisApp(ctk.CTk):
             ("⌕ Find", self._prompt_find),
             ("↧ Export", lambda: self._run_text("/export")),
             ("⌨ Shortcuts", lambda: self._quick(self._ui_command("/keys") or "")),
+            ("📎 Attach", self._choose_file),
         ):
             ctk.CTkButton(
                 quick, text=label, height=26, width=96,
@@ -492,11 +492,24 @@ class JarvisApp(ctk.CTk):
         )
         self.open_image_btn.pack(side="left", padx=8)
 
+        ctk.CTkButton(
+            footer, text="Refresh gallery", width=130, fg_color="transparent",
+            border_width=1, command=self._load_gallery,
+        ).pack(side="right")
+
+        # Everything generated so far. The files were always being saved;
+        # there was simply no way to look back through them.
+        self.gallery = ctk.CTkScrollableFrame(
+            body, fg_color=COLORS["bg"], height=130,
+            label_text="Earlier images", label_text_color=COLORS["muted"],
+        )
+        self.gallery.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.after(600, self._load_gallery)
+
     def _configure_tags(self) -> None:
-        """Colour the sender names. CTkTextbox wraps a tk.Text underneath."""
+        """Define every text tag. CTkTextbox wraps a tk.Text underneath."""
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
-        textbox.tag_config("user", foreground="#60a5fa")
-        textbox.tag_config("jarvis", foreground=COLORS["accent"])
+        render.configure_tags(textbox, COLORS, FONT_SIZE)
 
     def _show_tab(self, tab: str) -> None:
         self.active_tab = tab
@@ -580,7 +593,13 @@ class JarvisApp(ctk.CTk):
         tag = "user" if is_user else "jarvis"
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
         textbox.insert("end", f"{sender}:\n", tag)
-        textbox.insert("end", f"{text}\n\n")
+        if is_user:
+            # What you typed is shown exactly as you typed it — markdown in a
+            # question is usually punctuation, not formatting.
+            textbox.insert("end", f"{text}\n\n")
+        else:
+            render.insert(textbox, text, COLORS)
+            textbox.insert("end", "\n")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
@@ -640,6 +659,166 @@ class JarvisApp(ctk.CTk):
         self.refresh_mode()
         self.refresh_code_mode()
 
+    def retranslate(self) -> None:
+        """Relabel what can be relabelled without rebuilding the window.
+
+        Buttons and static labels are re-read from the translation table.
+        Text already in the chat log is left alone — it is a transcript of
+        what was said, and rewriting history would be worse than a mixed
+        window for one session.
+        """
+        pairs = (
+            (self.chat_tab_btn, "💬  ", "Chat"),
+            (self.image_tab_btn, "🎨  ", "Image Gen"),
+            (self.code_tab_btn, "⌨  ", "Code"),
+            (self.settings_btn, "⚙  ", "Settings"),
+            (self.update_btn, "⟳  ", "Check for Updates"),
+            (self.send_btn, "", "Send"),
+            (self.stop_btn, "", "Stop"),
+        )
+        for widget, prefix, text in pairs:
+            try:
+                widget.configure(text=prefix + i18n.t(text))
+            except Exception:
+                continue
+        try:
+            self.status_label.configure(text=i18n.t("Ready"))
+            self.chat_input.configure(
+                placeholder_text=i18n.t(
+                    "Ask JARVIS anything... (/image prompt to generate)"
+                )
+            )
+        except Exception:
+            pass
+        self.refresh_mode()
+
+    # --- dropped files, scheduled tasks -----------------------------------
+
+    def _enable_drag_and_drop(self) -> None:
+        """Let a file be dropped onto the window.
+
+        tkinterdnd2 is optional: if it is not installed the Attach button
+        still works, so this degrades to one extra click rather than to a
+        missing feature.
+        """
+        try:
+            from tkinterdnd2 import DND_FILES, TkinterDnD
+
+            # _require registers tkdnd's library path with this interpreter.
+            # Calling `package require tkdnd` first fails, because Tcl has not
+            # been told where to find it yet.
+            self.TkdndVersion = TkinterDnD._require(self)
+
+            # CTkTextbox is a frame wrapping a tk.Text; the drop has to be
+            # registered on the real widget, and the methods come from the
+            # tkdnd extension rather than from the class.
+            target = getattr(self.chat_log, "_textbox", self.chat_log)
+            target.tk.call("tkdnd::drop_target", "register", target._w, DND_FILES)
+            target.bind("<<Drop>>", self._on_drop)
+            self._dnd = True
+        except Exception as exc:
+            # Optional: the Attach button covers the same ground.
+            self._dnd = False
+            self._dnd_error = str(exc)
+
+    def _on_drop(self, event) -> None:
+        # Tk hands over a brace-quoted list when a path contains spaces.
+        raw = str(getattr(event, "data", "") or "")
+        paths = re.findall(r"\{([^}]*)\}|(\S+)", raw)
+        files = [a or b for a, b in paths if (a or b)]
+        for path in files[:4]:
+            self._attach(Path(path))
+
+    def _attach(self, path: Path) -> None:
+        """Open a dropped or chosen file with whichever command suits it."""
+        if not path.exists():
+            self._append_message("JARVIS", f"{path} no longer exists.",
+                                 is_user=False, record=False)
+            return
+        if path.is_dir():
+            self._run_text(f"/project {path}")
+            return
+
+        suffix = path.suffix.lower()
+        if suffix in {".pdf", ".docx", ".txt", ".md"}:
+            self._run_text(f"/doc {path}")
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+            self.current_image = path
+            self._show_image_preview(path)
+            self._show_tab("image")
+            self._quick(f"Opened {path.name}")
+        else:
+            self._run_text(f"/show {path}")
+
+    def _choose_file(self) -> None:
+        from tkinter import filedialog
+
+        chosen = filedialog.askopenfilename(title="Send a file to JARVIS")
+        if chosen:
+            self._attach(Path(chosen))
+
+    def _run_scheduled(self, task) -> None:
+        """A scheduled task came due. Runs on the scheduler thread."""
+        def work():
+            try:
+                response = self.jarvis.process(task.command)
+                text = response.text
+            except Exception as exc:
+                text = f"Scheduled task '{task.name}' failed: {exc}"
+            safe_after(self, lambda: self._append_message(
+                "JARVIS", f"[{task.name}] {text}", is_user=False, record=False
+            ))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # --- push to talk -----------------------------------------------------
+
+    def _ptt_down(self, _event=None) -> None:
+        if self._recording or self._busy:
+            return
+        if not self.jarvis.voice.start_push_to_talk():
+            self._quick("No microphone is available.")
+            return
+        self._recording = True
+        self.status_label.configure(text="Recording — release to send")
+        try:
+            self.mic_btn.configure(fg_color=COLORS["error"])
+        except Exception:
+            pass
+
+    def _ptt_up(self, _event=None) -> None:
+        if not self._recording:
+            return
+        self._recording = False
+        try:
+            self.mic_btn.configure(fg_color=COLORS["accent_dim"])
+        except Exception:
+            pass
+        self.status_label.configure(text="Transcribing…")
+
+        def work():
+            try:
+                heard = self.jarvis.voice.stop_push_to_talk()
+            except Exception as exc:
+                heard, error = None, str(exc)
+            else:
+                error = ""
+
+            def done():
+                self.status_label.configure(text="Ready")
+                if error:
+                    self._quick(f"Microphone error: {error}")
+                elif not heard:
+                    self._quick("Nothing was picked up — hold the key while speaking.")
+                else:
+                    self.chat_input.delete(0, "end")
+                    self.chat_input.insert(0, heard)
+                    self._send_chat()
+
+            safe_after(self, done)
+
+        threading.Thread(target=work, daemon=True).start()
+
     # --- security prompts -------------------------------------------------
 
     def _ask_permission(self, request) -> bool:
@@ -684,6 +863,8 @@ class JarvisApp(ctk.CTk):
         ("Ctrl+Shift+C", "Copy JARVIS's last reply"),
         ("Ctrl+,", "Open settings"),
         ("Escape", "Stop the request in flight"),
+        ("Hold F9", "Push to talk — speak, then release"),
+        ("Ctrl+O", "Attach a file"),
     )
 
     def _bind_shortcuts(self) -> None:
@@ -697,7 +878,16 @@ class JarvisApp(ctk.CTk):
             "<Control-C>": lambda e: self._copy_last(""),
             "<Control-comma>": lambda e: self._open_settings(),
             "<Escape>": lambda e: self._stop(),
+            "<Control-o>": lambda e: self._choose_file(),
         }
+        # Push-to-talk is a press/release pair rather than a toggle, so it
+        # cannot be expressed in the table above.
+        try:
+            self.bind_all("<KeyPress-F9>", self._ptt_down)
+            self.bind_all("<KeyRelease-F9>", self._ptt_up)
+        except tkinter.TclError:
+            pass
+
         for sequence, handler in bindings.items():
             try:
                 # "break" stops Tk also inserting the character into the entry.
@@ -1066,6 +1256,7 @@ class JarvisApp(ctk.CTk):
         if response.image_path:
             self.current_image = response.image_path
             self._show_image_preview(response.image_path)
+            self._load_gallery()
             self.status_label.configure(text="Image saved.")
         else:
             self._on_image_error(response.text)
@@ -1074,6 +1265,53 @@ class JarvisApp(ctk.CTk):
         self._set_busy(False)
         self.preview_label.configure(image=None, text=f"Error: {error}")
         self.status_label.configure(text="Generation failed.")
+
+    def _load_gallery(self, limit: int = 24) -> None:
+        """Show thumbnails of previously generated images, newest first."""
+        try:
+            folder = get_output_dir()
+            files = sorted(
+                (p for p in folder.glob("*")
+                 if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )[:limit]
+        except OSError:
+            files = []
+
+        for child in self.gallery.winfo_children():
+            child.destroy()
+        # Tk drops an image the moment nothing references it, so the thumbnails
+        # have to be kept alive explicitly or the row renders empty.
+        self._gallery_images = []
+
+        if not files:
+            ctk.CTkLabel(
+                self.gallery, text="Nothing generated yet.",
+                text_color=COLORS["muted"], font=ctk.CTkFont(size=11),
+            ).pack(pady=8)
+            return
+
+        row = ctk.CTkFrame(self.gallery, fg_color="transparent")
+        row.pack(fill="x")
+        for path in files:
+            try:
+                with Image.open(path) as raw:
+                    thumb = raw.copy()
+                thumb.thumbnail((96, 96))
+                image = ctk.CTkImage(thumb, size=thumb.size)
+            except Exception:
+                continue
+            self._gallery_images.append(image)
+            ctk.CTkButton(
+                row, image=image, text="", width=100, height=100,
+                fg_color="transparent", hover_color=COLORS["accent_dim"],
+                command=lambda p=path: self._open_from_gallery(p),
+            ).pack(side="left", padx=4, pady=4)
+
+    def _open_from_gallery(self, path: Path) -> None:
+        self.current_image = path
+        self._show_image_preview(path)
+        self.status_label.configure(text=path.name)
 
     def _show_image_preview(self, path: Path) -> None:
         try:
