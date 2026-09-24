@@ -554,6 +554,7 @@ def test_openrouter_is_free_and_comes_before_paid():
 
 def test_the_installer_asks_for_every_free_key():
     """Mid runs on Inception, yet the installer never asked for its key."""
+    pytest.importorskip("winreg", reason="the installer is Windows-only")
     import installer
 
     asked = {env for env, _label, _hint in installer.PROVIDER_FIELDS}
