@@ -202,7 +202,6 @@ def test_a_refused_agent_model_falls_back_and_says_why(monkeypatch):
     """Blueminds answers this model with 'has not been priced by the
     administrator yet'. The agent must still work, and say why it didn't
     use the model it was told to."""
-    import httpx
     from openai import BadRequestError
 
     from jarvis import agent as agent_mod, providers
@@ -215,7 +214,14 @@ def test_a_refused_agent_model_falls_back_and_says_why(monkeypatch):
 
     def fake_complete(provider, messages, model=None, timeout=None, on_chunk=None):
         if provider.name == "blueminds":
-            response = httpx.Response(400, request=httpx.Request("POST", "https://x"))
+            # A stand-in response: newer openai releases no longer pull in
+            # httpx, and building a real one made CI fail on a missing module.
+            class Response:
+                status_code = 400
+                headers: dict = {}
+                request = None
+
+            response = Response()
             raise BadRequestError(
                 "Model openrouter/z-ai/glm-5-turbo has not been priced by the administrator yet",
                 response=response, body=None)
