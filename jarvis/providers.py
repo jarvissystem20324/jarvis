@@ -155,10 +155,14 @@ BLUEMINDS = Provider(
     # but gpt-5.5, kimi-k2.5, gemma-4-26b and gpt-oss-20b all timed out at the
     # relay's own gateway (504), and two listed models answered 410 "reached
     # its end of life on 2026-08-26" — its catalogue is a month stale.
-    chat_model="gpt-5.5",
+    # GLM-5 Turbo, reached through Blueminds' OpenRouter channel, is the
+    # user's choice for this key and the coding agent's default. Blueminds
+    # has not enabled it yet ("has not been priced by the administrator"),
+    # and refuses it instantly, so nothing waits on it in the meantime.
+    chat_model="openrouter/z-ai/glm-5-turbo",
     free=False,
     signup="https://api.bluesminds.com/console/token",
-    notes="Third-party relay. Opt-in only: add it to JARVIS_EXTRA_PROVIDERS.",
+    notes="Third-party relay. Runs the coding agent (GLM-5 Turbo) when enabled.",
 )
 
 # Every provider JARVIS knows how to talk to.

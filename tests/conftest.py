@@ -63,6 +63,21 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setattr(library, "get_data_dir", lambda: data)
     monkeypatch.setattr(schedule.scheduler, "tasks", [])
 
+    # The developer's real .env still loads underneath these, and it may have
+    # voice on: a GUI test once greeted the room out loud through the
+    # speakers. Nothing in a test run should speak, search the web on its
+    # own, or register a system-wide dictation shortcut.
+    monkeypatch.setenv("JARVIS_VOICE", "false")
+    monkeypatch.setenv("JARVIS_TTS", "offline")
+    monkeypatch.setenv("JARVIS_AUTO_WEB", "off")
+    monkeypatch.setenv("JARVIS_DICTATE_HOTKEY", "off")
+    from jarvis import notes, reminders
+
+    monkeypatch.setattr(notes, "get_data_dir", lambda: data)
+    monkeypatch.setattr(reminders, "get_data_dir", lambda: data)
+    monkeypatch.setattr(reminders.board, "items", [])
+    monkeypatch.setattr(reminders.board, "missed", [])
+
     security.privacy.on = False
     security.permissions.set_asker(None)
     yield tmp_path

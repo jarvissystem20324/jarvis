@@ -22,6 +22,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import vault
 from .config import get_data_dir
 
 READABLE = {".pdf", ".docx", ".txt", ".md", ".markdown", ".rst", ".csv", ".html", ".htm"}
@@ -158,7 +159,8 @@ def build(root: Path) -> dict:
         "passages": [[p.file, p.page, p.text] for p in passages],
     }
     try:
-        _store(root).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        # Passages of your own documents: sealed like conversations are.
+        vault.write_json(_store(root), data, indent=None)
     except OSError:
         pass
     return data
@@ -166,7 +168,7 @@ def build(root: Path) -> dict:
 
 def load(root: Path) -> dict | None:
     try:
-        data = json.loads(_store(root).read_text(encoding="utf-8"))
+        data = vault.read_json(_store(root))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None

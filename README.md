@@ -1,4 +1,4 @@
-# JARVIS 5.0
+# JARVIS 6.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -41,7 +41,7 @@ python main.py
 | --- | --- | --- |
 | **Images** | FLUX.1-dev on NVIDIA, else Pollinations | Better with the NVIDIA key; works with none |
 | **Chat** | Gemini or Groq free tier | A free key |
-| **Speech out** | Built-in Windows voices | No |
+| **Speech out** | Microsoft's neural voices; the Windows voice offline and in Privacy mode | No |
 | **Speech in** | Groq Whisper, or local faster-whisper | A free key, or nothing if local |
 
 Set `JARVIS_PROVIDER` to pin one backend, or leave it `auto` to try each in
@@ -64,6 +64,15 @@ see when it recovers; then promote it with:
 JARVIS_EXTRA_PROVIDERS=blueminds
 ```
 
+The coding agent is the exception: it asks Blueminds for **GLM-5 Turbo**
+(`openrouter/z-ai/glm-5-turbo`) first on every `/agent`, `/fix` and
+`/testgen`. On 24 September 2026 Blueminds refused that model in a tenth of a
+second — *"has not been priced by the administrator yet"* — so the agent says
+so in its plan and falls through to the mode's models; the day Blueminds
+switches it on, the agent starts using it with no update. Change or remove it
+in Settings, or with `JARVIS_AGENT_MODEL=provider:model` (`mode` means none of
+its own). Your project's code goes to whichever model does the work.
+
 OpenAI still works and is still the best quality, but it is now strictly
 optional. `JARVIS_IMAGE_PROVIDER=auto` deliberately means *free*: having an
 OpenAI key on file isn't consent to bill it for every image. Set it to `openai`
@@ -75,6 +84,45 @@ Its image API is genuinely free and needs no account. Its free **text** tier,
 as of August 2026, returns `402 Payment Required` for anything longer than a
 trivial prompt, so it can't drive the chat — which is why chat needs one of the
 free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
+
+## Just say it
+
+Things with an exact answer on this PC are done here rather than described
+by a model — and never mistaken for chat ("what is the volume of a sphere"
+still goes to the AI):
+
+| Say | Does | Command |
+| --- | --- | --- |
+| pause music · next song · volume 30 · mute | Presses the media keys | `/media`, `/volume` |
+| open spotify · open downloads | Launches it from the Start menu | `/app` |
+| find my CV pdf from last month · open 2 | Searches your own folders by name, type and date | `/locate` |
+| why is my PC slow | CPU, memory, disk, battery, the programs responsible — explained | `/pc` |
+| remind me in 20 minutes to call Ata | A reminder with a notification | `/remind`, `/reminders` |
+| timer 10 minutes tea · alarm 7:30 | Timers and alarms that ring | `/timer`, `/alarm`, `/timers` |
+| weather tomorrow in Istanbul | Open-Meteo, no key | `/weather`, `/weather city <name>` |
+| note: buy milk | Quick notes, kept sealed | `/note`, `/notes` |
+| make this 800px wide as a JPG | Image tools on the last image | `/img` |
+| read that out loud | Reads an answer, a file or a page in the natural voice | `/readaloud` |
+
+Reminders, timers and alarms fire only while JARVIS is open; anything that
+came due while it was closed is shown as missed on the next start.
+
+**Dictation:** hold **Ctrl+Alt+D** anywhere — Word, Discord, a browser —
+speak, let go, and the words are typed where your cursor is.
+
+## Documents, data and translation
+
+| Command | Description |
+| --- | --- |
+| `/makedoc <what>` | Writes it as a Word document **and** a PDF. `/docx`, `/pdf` for one; `/makedoc revise: <change>` edits the last |
+| `/data <file.csv\|xlsx>` | Open a spreadsheet, then `/data <question>` or `/data chart <what>` — exact numbers, worked out here over every row |
+| `/read <url> [question]` | Read a web page; follow-up questions keep it open |
+| `/t <name> <text>` | Prompt templates — `/t email-reply`, `/t fix-grammar`, `/t save <name> <prompt>` |
+| `/translate <language>` | Live translation: everything you type or say is translated and spoken; `/translate off` |
+
+`/data` never lets the model compute or run code. It sees column names and
+six sample rows, answers with a small query, and JARVIS runs that query
+itself — so a sum is a sum, not an estimate.
 
 ## Commands
 
@@ -106,6 +154,7 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/fix` | Run the tests and repair what fails |
 | `/index`, `/where <thing>` | Index the project, then find anything in it |
 | `/git <command>` | Reads are free; add, commit, checkout and push ask |
+| `/commit [all]` | Writes the commit message from your staged diff, then commits once you approve it |
 | `/web <question\|url>` | Search the web, or read one page |
 | `/stats` | Which providers you use and how fast they are |
 | `/task ...` | Scheduled tasks, while JARVIS is open |
@@ -128,6 +177,33 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/audit [clear]` | What JARVIS has actually done |
 | `/privacy` | Stop saving anything: no history, no audit, no stored facts |
 | `/security` | Current security settings |
+| `/redact [on\|off]` | What was masked in the last request |
+| `/autoweb [on\|off]` | Automatic web search for questions about recent things |
+
+**Encryption at rest.** Conversations, remembered facts, notes, reminders
+and the document index are encrypted with your Windows login (DPAPI). A
+copied data folder is unreadable anywhere else. Older plain files are sealed
+on first start. If an administrator *resets* your Windows password, these
+files cannot be recovered — `JARVIS_ENCRYPT=off` if that worries you.
+
+**Redaction.** API keys, passwords, email addresses, phone and card numbers
+are replaced by placeholders like `[EMAIL-1]` before anything is sent to an
+AI, and put back into the reply on this PC. Your saved history keeps the
+real values.
+
+**Prompt-injection shield.** Web pages, documents, spreadsheets and search
+results are marked as untrusted. Lines written to the AI rather than to you
+("ignore your previous instructions…"), HTML comments and invisible Unicode
+are removed, and you are told when a source tried it.
+
+**Automatic web search.** A question about something recent ("who won the
+latest…", "…today?") searches DuckDuckGo first and lists the sources under
+the answer. Only the question is sent. Off in Privacy mode and code mode.
+
+**Natural voices.** Speech uses Microsoft's neural voices (Ryan, British,
+by default; Turkish text gets a Turkish voice). The text being spoken goes
+to Microsoft; Privacy mode and being offline switch to the built-in
+Windows voice, which never leaves the PC. Pick a voice in Settings.
 
 ### From the bundled addons
 

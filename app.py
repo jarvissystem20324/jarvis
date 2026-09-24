@@ -77,6 +77,8 @@ def selftest() -> int:
           or "none (needs a free Groq key or faster-whisper)")
     check("image backend", lambda: "OpenAI (paid)"
           if get_image_provider() == "openai"
+          else "FLUX.1-dev on NVIDIA, Pollinations as fallback"
+          if get_image_provider() in {"auto", "nvidia", "flux"} and providers.has_key(providers.NVIDIA)
           else "Pollinations (free, no key)")
     check("output dir", lambda: __import__(
         "jarvis.config", fromlist=["get_output_dir"]).get_output_dir())
@@ -154,6 +156,42 @@ def selftest() -> int:
         return f"available ({tkinterdnd2.__name__})"
 
     check("drag and drop", _dragdrop)
+
+    # 6.0. Each of these is imported lazily at the moment it is used, which
+    # is exactly how a library goes missing from a build without anyone
+    # noticing until a user asks for it.
+    def _voice() -> str:
+        import edge_tts  # noqa: F401
+        from jarvis import neural
+
+        return f"natural voices available ({len(neural.VOICES)} offered)"
+
+    check("natural voice", _voice)
+
+    def _documents() -> str:
+        import tempfile
+        from pathlib import Path as _P
+
+        from jarvis import writer
+
+        folder = _P(tempfile.mkdtemp())
+        written = [writer.to_docx("# Test\n**ş ğ ı**", folder / "t.docx"),
+                   writer.to_pdf("# Test\n**ş ğ ı**", folder / "t.pdf")]
+        return ", ".join(f"{p.suffix} {p.stat().st_size // 1024} KB" for p in written)
+
+    check("Word + PDF output", _documents)
+    check("spreadsheets", lambda: "openpyxl " + __import__("openpyxl").__version__)
+    check("PC status", lambda: f"psutil, {__import__('psutil').cpu_count()} cores")
+
+    def _vault() -> str:
+        from jarvis import vault
+
+        if not vault.available():
+            return "not available on this platform"
+        sealed = vault.protect(b"self-test")
+        return "DPAPI round trip ok" if vault.unprotect(sealed) == b"self-test" else "MISMATCH"
+
+    check("encryption", _vault)
 
     from jarvis import config as _cfg
     if getattr(_cfg, "last_env_changes", None):

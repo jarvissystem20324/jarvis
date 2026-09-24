@@ -52,6 +52,10 @@ RESERVED_COMMANDS = frozenset({
     "bench", "compare", "chat", "chats",
     "agent", "fix", "web", "stats", "lang", "theme",
     "index", "where", "git", "tasks", "task", "trace", "testgen", "recall", "docs", "vary", "health", "release",
+    # 6.0
+    "media", "volume", "app", "locate", "pc", "remind", "reminders", "timer", "alarm",
+    "timers", "weather", "note", "notes", "t", "makedoc", "docx", "pdf", "data", "img",
+    "translate", "readaloud", "commit", "redact", "autoweb",
 })
 
 

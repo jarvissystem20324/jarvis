@@ -105,6 +105,7 @@ class SettingsWindow(ctk.CTkToplevel):
             self._add_row(body, env_name, label, where, free)
 
         self._add_model_section(body)
+        self._add_assistant_section(body)
         self._add_appearance_section(body)
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -199,6 +200,75 @@ class SettingsWindow(ctk.CTkToplevel):
             if existing:
                 entry.insert(0, existing)
             self.entries[modes.env_key(mode)] = entry
+
+    def _heading(self, parent, title: str, note: str) -> None:
+        ctk.CTkFrame(parent, height=1, fg_color=self.colors["accent_dim"]).pack(
+            fill="x", padx=10, pady=(18, 10)
+        )
+        ctk.CTkLabel(parent, text=title, anchor="w", font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color=self.colors["accent"]).pack(anchor="w", padx=12)
+        ctk.CTkLabel(parent, text=note, font=ctk.CTkFont(size=10), text_color=self.colors["muted"],
+                     anchor="w", justify="left", wraplength=520).pack(anchor="w", padx=12, pady=(0, 8))
+
+    def _labelled(self, parent, label: str):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=3)
+        ctk.CTkLabel(row, text=label, width=150, anchor="w",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=self.colors["text"]).pack(side="left")
+        return row
+
+    def _add_assistant_section(self, parent) -> None:
+        """Agent model, voice, home city, privacy switches, dictation."""
+        from jarvis import neural
+
+        self._heading(parent, "Assistant",
+                      "The agent model is tried first for /agent, /fix and /testgen; if it "
+                      "refuses or stays silent the mode's models take over.")
+
+        row = self._labelled(parent, "Coding agent model")
+        entry = ctk.CTkEntry(row, height=30, placeholder_text=modes.AGENT_DEFAULT)
+        entry.pack(side="left", fill="x", expand=True)
+        if self.original.get(modes.AGENT_ENV):
+            entry.insert(0, self.original[modes.AGENT_ENV])
+        self.entries[modes.AGENT_ENV] = entry
+
+        voices = {code: label for code, label in neural.VOICES}
+        voices["offline"] = "Windows voice (offline)"
+        row = self._labelled(parent, "Voice")
+        menu = ctk.CTkOptionMenu(row, values=list(voices.values()), width=260)
+        menu.set(voices.get(self.original.get("JARVIS_NEURAL_VOICE", "").strip(), voices[neural.DEFAULT_VOICE]))
+        menu.pack(side="left")
+        self.choices["JARVIS_NEURAL_VOICE"] = (menu, {v: k for k, v in voices.items()})
+
+        row = self._labelled(parent, "Home city (weather)")
+        city = ctk.CTkEntry(row, height=30, placeholder_text="e.g. Istanbul")
+        city.pack(side="left", fill="x", expand=True)
+        if self.original.get("JARVIS_CITY"):
+            city.insert(0, self.original["JARVIS_CITY"])
+        self.entries["JARVIS_CITY"] = city
+
+        row = self._labelled(parent, "Dictation shortcut")
+        dictate = ctk.CTkEntry(row, height=30, placeholder_text="ctrl+alt+d  (off to disable)")
+        dictate.pack(side="left", fill="x", expand=True)
+        if self.original.get("JARVIS_DICTATE_HOTKEY"):
+            dictate.insert(0, self.original["JARVIS_DICTATE_HOTKEY"])
+        self.entries["JARVIS_DICTATE_HOTKEY"] = dictate
+
+        self._heading(parent, "Privacy",
+                      "Encryption ties saved chats, memory and notes to your Windows login. "
+                      "Redaction masks keys, passwords, emails and phone numbers before "
+                      "anything is sent. Auto web search looks up recent things on its own.")
+        switch = {"on": "On", "off": "Off"}
+        for env_name, label in (("JARVIS_ENCRYPT", "Encrypt saved data"),
+                                ("JARVIS_REDACT", "Redact before sending"),
+                                ("JARVIS_AUTO_WEB", "Auto web search")):
+            row = self._labelled(parent, label)
+            menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+            current = self.original.get(env_name, "on").strip().lower()
+            menu.set("Off" if current in {"off", "0", "false", "no"} else "On")
+            menu.pack(side="left")
+            self.choices[env_name] = (menu, {v: k for k, v in switch.items()})
 
     def _add_appearance_section(self, parent) -> None:
         """Theme, text size and interface language."""
@@ -300,6 +370,9 @@ class SettingsWindow(ctk.CTkToplevel):
     def _explain(exc: Exception) -> str:
         """Turn a provider error into something worth reading."""
         text = str(getattr(exc, "message", None) or exc).lower()
+        if "has not been priced" in text or "model_price_error" in text:
+            # Blueminds: the key is accepted, the model is not enabled yet.
+            return "key works — model not switched on by the provider yet"
         if "invalid_api_key" in text or "invalid api key" in text or "unauthorized" in text:
             return "key rejected"
         if "no credits" in text or "insufficient_quota" in text or "credit_balance" in text:

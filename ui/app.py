@@ -20,7 +20,7 @@ from jarvis.brain import Cancelled
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
-from jarvis import i18n, schedule, updater
+from jarvis import i18n, reminders, schedule, updater
 from ui import notify, render, theme
 
 ctk.set_default_color_theme("blue")
@@ -110,12 +110,22 @@ class JarvisApp(ctk.CTk):
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
         self._report_env_migration()
         self._restore_history()
+        try:
+            from jarvis import history
+
+            # Which conversation the log is showing, so a typed /chat that
+            # switches to another one redraws the window.
+            self._shown_chat = history.current_name()
+        except Exception:
+            pass
         self._first_run()
         self.chat_input.focus_set()
 
         self._enable_drag_and_drop()
         # Scheduled tasks run only while this window is open, by design.
         schedule.scheduler.start(self._run_scheduled)
+        reminders.board.start(self._reminder_fired)
+        self.after(1500, self._report_missed)
 
         updater.cleanup_previous_update()
         # Quietly look for a new version a moment after the window settles.
@@ -319,7 +329,8 @@ class JarvisApp(ctk.CTk):
     def _build_chat_tab(self) -> None:
         self.chat_frame = ctk.CTkFrame(self.content, fg_color=COLORS["bg"])
         self.chat_frame.grid_rowconfigure(0, weight=1)
-        self.chat_frame.grid_columnconfigure(0, weight=1)
+        self.chat_frame.grid_columnconfigure(1, weight=1)
+        self._build_chat_list()
 
         self.chat_log = ctk.CTkTextbox(
             self.chat_frame,
@@ -329,12 +340,12 @@ class JarvisApp(ctk.CTk):
             text_color=COLORS["text"],
             activate_scrollbars=True,
         )
-        self.chat_log.grid(row=0, column=0, sticky="nsew", padx=16, pady=(16, 8))
+        self.chat_log.grid(row=0, column=1, sticky="nsew", padx=16, pady=(16, 8))
         self._configure_tags()
         self.chat_log.configure(state="disabled")
 
         input_row = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
-        input_row.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+        input_row.grid(row=1, column=1, sticky="ew", padx=16, pady=(0, 16))
         input_row.grid_columnconfigure(0, weight=1)
 
         self.chat_input = ctk.CTkEntry(
@@ -382,8 +393,9 @@ class JarvisApp(ctk.CTk):
 
         # A row of things you otherwise have to remember a command for.
         quick = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
-        quick.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        quick.grid(row=2, column=1, sticky="ew", padx=16, pady=(0, 10))
         for label, command in (
+            ("☰ Chats", self._toggle_chat_list),
             ("⧉ Copy reply", lambda: self._quick(self._copy_last(""))),
             ("⧉ Copy code", lambda: self._quick(self._copy_last("code"))),
             ("⌕ Find", self._prompt_find),
@@ -397,6 +409,162 @@ class JarvisApp(ctk.CTk):
                 fg_color="transparent", hover_color=COLORS["accent_dim"],
                 text_color=COLORS["muted"], command=command,
             ).pack(side="left", padx=(0, 6))
+
+    # --- conversation list ------------------------------------------------
+
+    def _build_chat_list(self) -> None:
+        """Saved conversations down the left of the chat. Ctrl+B hides it."""
+        panel = ctk.CTkFrame(self.chat_frame, fg_color=COLORS["panel"], width=190, corner_radius=8)
+        panel.grid(row=0, column=0, rowspan=3, sticky="nsw", padx=(16, 0), pady=16)
+        panel.grid_propagate(False)
+        self.chat_list_panel = panel
+
+        head = ctk.CTkFrame(panel, fg_color="transparent")
+        head.pack(fill="x", padx=10, pady=(10, 4))
+        ctk.CTkLabel(head, text="CONVERSATIONS", font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=COLORS["muted"]).pack(side="left")
+        ctk.CTkButton(head, text="+ New", width=54, height=24, font=ctk.CTkFont(size=11),
+                      fg_color=COLORS["accent_dim"], hover_color=COLORS["accent"],
+                      command=self._new_chat).pack(side="right")
+        self.chat_list = ctk.CTkScrollableFrame(panel, fg_color="transparent")
+        self.chat_list.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        self._chat_list_shown = True
+        self._shown_chat = ""
+        self.after(50, self._refresh_chat_list)
+
+    def _refresh_chat_list(self) -> None:
+        try:
+            from jarvis import history
+
+            chats = history.list_chats()
+            here = history.current_name()
+        except Exception:
+            return
+        if here not in {c["name"] for c in chats}:
+            chats.insert(0, {"name": here, "saved": "", "exchanges": len(self.jarvis.brain.history) // 2})
+        for child in self.chat_list.winfo_children():
+            child.destroy()
+        for chat in chats[:60]:
+            name = chat["name"]
+            active = name == here
+            button = ctk.CTkButton(
+                self.chat_list, text=name if len(name) <= 22 else name[:21] + "…",
+                anchor="w", height=30, font=ctk.CTkFont(size=12, weight="bold" if active else "normal"),
+                fg_color=COLORS["accent_dim"] if active else "transparent",
+                hover_color=COLORS["accent_dim"], text_color=COLORS["text"],
+                command=lambda n=name: self._switch_chat(n),
+            )
+            button.pack(fill="x", pady=1)
+            button.bind("<Button-3>", lambda e, n=name: self._chat_menu(e, n))
+
+    def _toggle_chat_list(self) -> None:
+        if self._chat_list_shown:
+            self.chat_list_panel.grid_remove()
+        else:
+            self.chat_list_panel.grid()
+            self._refresh_chat_list()
+        self._chat_list_shown = not self._chat_list_shown
+
+    def _switch_chat(self, name: str) -> None:
+        if self._busy:
+            return
+        from jarvis import history
+
+        if name == history.current_name():
+            return
+        self.jarvis.chats(name)
+        self._render_conversation()
+
+    def _new_chat(self) -> None:
+        if self._busy:
+            return
+        dialog = ctk.CTkInputDialog(text="Name for the new conversation:", title="New conversation")
+        name = (dialog.get_input() or "").strip()
+        if not name:
+            return
+        self.jarvis.chats(f"new {name}")
+        self._render_conversation()
+
+    def _chat_menu(self, event, name: str) -> None:
+        menu = tkinter.Menu(self, tearoff=0)
+        menu.add_command(label="Rename…", command=lambda: self._rename_chat(name))
+        menu.add_command(label="Delete", command=lambda: self._delete_chat(name))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _rename_chat(self, name: str) -> None:
+        from jarvis import history
+
+        dialog = ctk.CTkInputDialog(text=f"Rename '{name}' to:", title="Rename conversation")
+        new = (dialog.get_input() or "").strip()
+        if not new or new == name:
+            return
+        if name == history.current_name():
+            self.jarvis.save_history()
+        problem = history.rename_chat(name, new)
+        if problem:
+            self._quick(problem)
+        self._refresh_chat_list()
+
+    def _delete_chat(self, name: str) -> None:
+        from tkinter import messagebox
+
+        if not messagebox.askyesno("Delete conversation", f"Delete '{name}'? This cannot be undone.",
+                                   parent=self):
+            return
+        self._quick(self.jarvis.chats(f"delete {name}"))
+        self._refresh_chat_list()
+
+    def _render_conversation(self) -> None:
+        """Show the conversation that is now current, from its saved turns."""
+        from jarvis import history
+
+        self.chat_log.configure(state="normal")
+        self.chat_log.delete("1.0", "end")
+        self.chat_log.configure(state="disabled")
+        self._inline_images.clear()
+        here = history.current_name()
+        self._shown_chat = here
+        self._append_message("JARVIS", f"— {here} —", is_user=False, record=False)
+        if self.jarvis.brain.summary:
+            self._append_message("JARVIS", "(Earlier turns are summarised and still remembered.)",
+                                 is_user=False, record=False)
+        for message in self.jarvis.brain.history:
+            is_user = message.get("role") == "user"
+            self._append_message("You" if is_user else "JARVIS", message.get("content") or "",
+                                 is_user=is_user)
+        self.refresh_mode()
+        self.refresh_code_mode()
+        self._refresh_chat_list()
+
+    # --- reminders ----------------------------------------------------------
+
+    def _reminder_fired(self, item) -> None:
+        """Called on the reminder thread when something comes due."""
+        safe_after(self, lambda: self._show_reminder(item))
+        threading.Thread(target=reminders.ring, args=(item.kind,), daemon=True).start()
+
+    def _show_reminder(self, item) -> None:
+        icon = {"timer": "⏱", "alarm": "⏰"}.get(item.kind, "🔔")
+        title = {"timer": "Timer done", "alarm": "Alarm"}.get(item.kind, "Reminder")
+        text = item.text or title
+        self._append_message("JARVIS", f"{icon} {title}: {text}", is_user=False, record=False)
+        notify.flash(self)
+        notify.toast(f"JARVIS — {title}", text)
+        if self.jarvis.voice_enabled:
+            self.jarvis.voice.speak(f"{title}. {text}")
+
+    def _report_missed(self) -> None:
+        missed = reminders.board.missed
+        if not missed:
+            return
+        lines = "\n".join(f"  • {r.text or r.kind} (was due {time.strftime('%d %b %H:%M', time.localtime(r.due))})"
+                          for r in missed)
+        self._append_message("JARVIS", f"While I was closed, these came due:\n{lines}",
+                             is_user=False, record=False)
+        reminders.board.missed = []
 
     def _quick(self, message: str) -> None:
         """Report the result of a toolbar button without cluttering the chat."""
@@ -799,8 +967,11 @@ class JarvisApp(ctk.CTk):
         suffix = path.suffix.lower()
         if suffix in {".pdf", ".docx", ".txt", ".md"}:
             self._run_text(f"/doc {path}")
+        elif suffix in {".csv", ".tsv", ".xlsx", ".xlsm"}:
+            self._run_text(f"/data {path}")
         elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
             self.current_image = path
+            self.jarvis.current_image = path
             self._show_image_preview(path)
             self._show_tab("image")
             self._quick(f"Opened {path.name}")
@@ -922,6 +1093,9 @@ class JarvisApp(ctk.CTk):
         ("Escape", "Stop the request in flight"),
         ("Hold F9", "Push to talk — speak, then release"),
         ("Ctrl+O", "Attach a file"),
+        ("Ctrl+B", "Show or hide the conversation list"),
+        ("Ctrl+Alt+J", "Bring JARVIS to the front, from anywhere"),
+        ("Hold Ctrl+Alt+D", "Dictate into any app — speak, release, it types"),
     )
 
     def _bind_shortcuts(self) -> None:
@@ -936,6 +1110,7 @@ class JarvisApp(ctk.CTk):
             "<Control-comma>": lambda e: self._open_settings(),
             "<Escape>": lambda e: self._stop(),
             "<Control-o>": lambda e: self._choose_file(),
+            "<Control-b>": lambda e: self._toggle_chat_list(),
         }
         # Push-to-talk is a press/release pair rather than a toggle, so it
         # cannot be expressed in the table above.
@@ -1159,6 +1334,11 @@ class JarvisApp(ctk.CTk):
     def _stop(self) -> None:
         """Abandon whatever is in flight and give the window back."""
         if not self._busy:
+            # Nothing in flight: Escape stops JARVIS talking instead.
+            try:
+                self.jarvis.voice.stop()
+            except Exception:
+                pass
             return
         self._request_id += 1          # invalidates any reply still coming
         if self._streaming:
@@ -1228,7 +1408,11 @@ class JarvisApp(ctk.CTk):
             textbox.delete("stream_start", "end-1c")
         except tkinter.TclError:
             pass
-        textbox.insert("end", f"{text}\n\n")
+        # Rendered, not inserted raw. 4.0 said streamed replies were
+        # formatted; only restored history ever was, because this line wrote
+        # the finished text as plain characters over the streamed body.
+        render.insert(textbox, text, COLORS)
+        textbox.insert("end", "\n")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
         self._last_reply = text
@@ -1299,6 +1483,15 @@ class JarvisApp(ctk.CTk):
             pass
         self.refresh_code_mode()
         self._end_stream(response.text)
+        try:
+            from jarvis import history
+
+            if self._shown_chat and history.current_name() != self._shown_chat:
+                self._render_conversation()
+            else:
+                self._refresh_chat_list()
+        except Exception:
+            pass
         paths = response.image_paths or ([response.image_path] if response.image_path else [])
         if paths:
             # Shown in the conversation, and kept current in the Image tab,

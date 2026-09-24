@@ -297,10 +297,26 @@ def summary() -> str:
         f"  Audit log          : {'on' if audit.enabled and not privacy.on else 'off'}"
         f"  ({len(entries)} entries, {denied} denied)\n"
         f"  Privacy mode       : {'ON — nothing is being saved' if privacy.on else 'off'}\n"
-        f"  Log file           : {audit.path()}\n\n"
+        f"  Log file           : {audit.path()}\n"
+        f"  Encryption at rest : {_vault_state()}\n"
+        f"  Redaction          : {_redact_state()}\n"
+        "  Injection shield   : on — web pages, documents and files are marked untrusted\n\n"
         "  /audit    recent actions        /privacy  stop saving anything\n"
         "  /scan     find security problems  /sandbox what untrusted code would do"
     )
+
+
+def _vault_state() -> str:
+    from . import vault
+
+    return vault.describe()
+
+
+def _redact_state() -> str:
+    from . import redact
+
+    return ("on — keys, passwords, emails, phone and card numbers are masked before sending"
+            if redact.enabled() else "OFF — /redact on")
 
 
 def env_file_findings() -> list[tuple[str, str, str]]:

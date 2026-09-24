@@ -20,7 +20,7 @@ from openai import (
     RateLimitError,
 )
 
-from . import modes, providers, security
+from . import modes, providers, redact, security
 from .personality import JARVIS_IDENTITY, JARVIS_SYSTEM_PROMPT
 from .providers import Provider
 
@@ -224,11 +224,22 @@ class Brain:
         self._trim()
         return reply
 
-    def ask_once(self, prompt: str, image_b64: str | None = None) -> str:
+    def ask_once(
+        self,
+        prompt: str,
+        image_b64: str | None = None,
+        targets: tuple[tuple[str, str], ...] = (),
+        target_timeout: float | None = None,
+    ) -> str:
         """One-off question that never touches conversation history.
 
         Addons use this so a document summary or a screen description doesn't
         pollute the chat the user is actually having.
+
+        `targets` are (provider, model) pairs to try before the mode's own —
+        the coding agent passes its model here. They are tried the way a
+        mode's preferred model is: a refusal or a silence skips that model
+        for the session and the ordinary chain answers instead.
         """
         if image_b64:
             content = [
@@ -242,8 +253,17 @@ class Brain:
         else:
             messages = [{"role": "user", "content": prompt}]
 
-        reply, error = self._chat_over_chain(messages, vision=bool(image_b64))
+        reply, error = self._chat_over_chain(
+            messages, vision=bool(image_b64),
+            targets=targets, target_timeout=target_timeout,
+        )
         return reply if reply is not None else (error or "No AI provider is configured.")
+
+    def last_answered(self) -> str:
+        """'Provider · model' that produced the most recent reply, or ''."""
+        if self._active is None or not self._last_model:
+            return ""
+        return f"{self._active.label} · {self._last_model}"
 
     # --- provider walking -------------------------------------------------
 
@@ -265,7 +285,26 @@ class Brain:
         messages: list[dict],
         vision: bool = False,
         on_chunk: Callable[[str | None], None] | None = None,
+        targets: tuple[tuple[str, str], ...] = (),
+        target_timeout: float | None = None,
     ) -> tuple[str | None, str | None]:
+        # Keys, passwords, emails and phone numbers leave as placeholders and
+        # come back filled in. The caller's `messages` — the saved history —
+        # is never modified; only the copy that is sent is masked.
+        redactor = None
+        if redact.enabled():
+            redactor = redact.Redactor()
+            messages = redactor.mask_messages(messages)
+            if redactor.total:
+                messages = self._with_note(messages, redact.NOTE)
+                security.audit.record("redacted", redactor.describe())
+                if on_chunk is not None:
+                    raw_chunk = on_chunk
+
+                    def on_chunk(piece, _raw=raw_chunk, _r=redactor):
+                        _raw(_r.restore(piece) if piece else piece)
+        self.last_redaction = redactor
+
         chain = self._chain(vision=vision)
         if not chain:
             if vision and self._chain():
@@ -281,7 +320,9 @@ class Brain:
         # _dead and _cooldown — so a provider that was briefly throttled comes
         # back to the front on its own instead of the session being stuck on
         # the fallback for good.
-        attempts = self._attempts(chain, vision=vision)
+        attempts = self._attempts(
+            chain, vision=vision, extra=targets, extra_timeout=target_timeout
+        )
         problems: list[str] = []
         shown = False
         for provider, model, timeout, is_preferred in attempts:
@@ -337,9 +378,10 @@ class Brain:
                     # Only this mode's preferred model is missing; the provider
                     # itself is fine and still serves its own default.
                     problems.append(
-                        f"{provider.label}: {self.mode.label} prefers '{model}', "
-                        "which this account cannot reach"
+                        f"{provider.label}: '{model}' is not available to "
+                        "this account"
                     )
+                    self._slow_targets.add((provider.name, model))
                     continue
                 names = providers.list_models(provider)
                 hint = f" Available: {', '.join(names[:8])}" if names else ""
@@ -375,12 +417,17 @@ class Brain:
             if reply:
                 self._active = provider
                 self._last_model = model
+                # What failed on the way, so a caller can say why its own
+                # choice of model did not answer.
+                self.last_problems = list(problems)
                 security.audit.record(
                     "answered", f"{provider.label} / {model}",
                     f"{time.monotonic() - started:.1f}s, {self.mode.label}",
                 )
                 if self.code_mode:
                     reply = self._strip_pleasantry(reply)
+                if redactor is not None:
+                    reply = redactor.restore(reply)
                 return reply, None
             problems.append(f"{provider.label}: empty response")
 
@@ -400,7 +447,11 @@ class Brain:
         )
 
     def _attempts(
-        self, chain: list[Provider], vision: bool = False
+        self,
+        chain: list[Provider],
+        vision: bool = False,
+        extra: tuple[tuple[str, str], ...] = (),
+        extra_timeout: float | None = None,
     ) -> list[tuple[Provider, str, float | None, bool]]:
         """What to try, in order: the mode's preferred models, then the chain.
 
@@ -412,13 +463,27 @@ class Brain:
         out: list[tuple[Provider, str, float | None, bool]] = []
         seen: set[tuple[str, str]] = set()
 
+        # A caller's own choice (the coding agent's model) goes first. An
+        # opt-in provider is allowed here even though it is not in the
+        # chain: naming it for this one job is the opt-in.
+        for name, model in extra:
+            provider = providers.BY_NAME.get(name)
+            if provider is None or not providers.has_key(provider):
+                continue
+            if provider.name in self._dead or (provider.name, model) in self._slow_targets:
+                continue
+            if vision and not provider.vision:
+                continue
+            out.append((provider, model, extra_timeout or self.mode.fallback_timeout, True))
+            seen.add((provider.name, model))
+
         for index, (name, model) in enumerate(modes.targets_for(self.mode)):
             provider = providers.BY_NAME.get(name)
             if provider is None or not providers.has_key(provider):
                 continue
             if provider.name in self._dead:
                 continue
-            if (provider.name, model) in self._slow_targets:
+            if (provider.name, model) in self._slow_targets or (provider.name, model) in seen:
                 continue
             if vision and not provider.vision:
                 continue
@@ -575,6 +640,23 @@ class Brain:
 
     # --- helpers ----------------------------------------------------------
 
+    last_redaction = None
+    last_problems: list = []
+
+    @staticmethod
+    def _with_note(messages: list[dict], note: str) -> list[dict]:
+        """Add an instruction to the system message, or to the first turn."""
+        out = [dict(m) for m in messages]
+        for message in out:
+            if message.get("role") == "system" and isinstance(message.get("content"), str):
+                message["content"] = f"{message['content']}\n\n{note}"
+                return out
+        for message in out:
+            if message.get("role") == "user" and isinstance(message.get("content"), str):
+                message["content"] = f"{note}\n\n{message['content']}"
+                return out
+        return out
+
     @staticmethod
     def _mentions(exc: Exception, *needles: str) -> bool:
         text = str(getattr(exc, "message", None) or exc).lower()
@@ -665,6 +747,9 @@ class Brain:
             return "key rejected"
         if "rate" in low and "limit" in low:
             return "rate limited"
+        if "has not been priced" in low or "model_price_error" in low:
+            # Blueminds' wording for a model it lists but has not switched on.
+            return "not switched on by the provider yet"
         return text[:110] or exc.__class__.__name__
 
     @staticmethod

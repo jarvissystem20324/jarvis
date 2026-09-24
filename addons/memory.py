@@ -1,8 +1,9 @@
 """Persistent memory — facts JARVIS keeps across restarts.
 
-Stored as plain JSON next to the app so you can read, edit, or delete it with a
-text editor. Nothing is uploaded anywhere; the file is only ever read to build
-the context sent with your next message.
+Stored next to the app, encrypted with your Windows login (see jarvis/vault)
+so a copied data folder does not hand over what JARVIS knows about you. Use
+/memories and /forget to read and edit it. Nothing is uploaded anywhere; the
+file is only ever read to build the context sent with your next message.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import re
 from datetime import date
 from pathlib import Path
 
+from jarvis import vault
 from jarvis.addons import Addon, Command
 
 MAX_FACTS = 200
@@ -44,8 +46,8 @@ class Memory(Addon):
         if not path.exists():
             return []
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            data = vault.read_json(path)
+        except (ValueError, OSError):
             # A corrupt file shouldn't wedge the addon — start fresh but keep
             # the old one around so nothing is silently destroyed.
             try:
@@ -56,10 +58,7 @@ class Memory(Addon):
         return data if isinstance(data, list) else []
 
     def _save(self, ctx, facts: list[dict]) -> None:
-        self._path(ctx).write_text(
-            json.dumps(facts[-MAX_FACTS:], indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        vault.write_json(self._path(ctx), facts[-MAX_FACTS:])
 
     # --- commands ---------------------------------------------------------
 

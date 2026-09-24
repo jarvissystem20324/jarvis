@@ -26,11 +26,16 @@ pytestmark = pytest.mark.skipif(not _display_available(), reason="no display")
 
 
 @pytest.fixture
-def app(base, allow):
+def app(base, allow, monkeypatch):
     import time
     import tkinter
 
     import ui.app as ui_app
+
+    # The window checks for updates 2.5s after it opens, over the network.
+    # A slow test outlived that once and the real check's result landed in
+    # the middle of the update-dialog test. Tests do not touch the network.
+    monkeypatch.setattr(ui_app.updater, "get_update_url", lambda: "")
 
     # Creating many Tk interpreters in one process occasionally fails on
     # Windows with "couldn't read file .../tcl8.6/auto.tcl" although the file
@@ -66,6 +71,52 @@ def test_replies_are_rendered_as_markdown(app):
     box = getattr(app.chat_log, "_textbox", app.chat_log)
     used = {tag for tag in box.tag_names() if box.tag_ranges(tag)}
     assert {"kw", "code_bg", "bold", "inline", "h"} <= used
+
+
+def test_streamed_replies_are_rendered_too(app):
+    """The test above passed while every real reply showed raw ** and ```:
+    live answers stream, and the streamed path wrote plain text. That is the
+    path almost every answer takes."""
+    app._begin_stream()
+    app._append_stream("**bo")
+    app._append_stream("ld** text")
+    app._end_stream("# Title\n**bold** text\n\n```python\nx = 1\n```")
+    app.update()
+    body = _text(app)
+    assert "**" not in body and "```" not in body
+    box = getattr(app.chat_log, "_textbox", app.chat_log)
+    used = {tag for tag in box.tag_names() if box.tag_ranges(tag)}
+    assert {"bold", "h", "code_bg"} <= used
+
+
+def test_the_conversation_list_switches_and_redraws(app):
+    from jarvis import history
+
+    app.jarvis.brain.history = [{"role": "user", "content": "first chat question"},
+                                {"role": "assistant", "content": "first answer"}]
+    app.jarvis.save_history()
+    app.jarvis.chats("new second")
+    app._render_conversation()
+    assert "first chat question" not in _text(app)
+    app._switch_chat("main")
+    app.update()
+    assert history.current_name() == "main"
+    assert "first chat question" in _text(app)
+    names = [child.cget("text") for child in app.chat_list.winfo_children()]
+    assert "main" in names and "second" in names
+
+
+def test_a_due_reminder_appears_in_the_chat(app, monkeypatch):
+    from jarvis import reminders
+    from ui import notify
+
+    shown = []
+    monkeypatch.setattr(notify, "toast", lambda title, body: shown.append((title, body)))
+    monkeypatch.setattr(notify, "flash", lambda window: None)
+    item = reminders.Reminder(1, "reminder", "call Ata", 0, 0)
+    app._show_reminder(item)
+    assert "call Ata" in _text(app)
+    assert shown == [("JARVIS — Reminder", "call Ata")]
 
 
 def test_find_highlights_and_copy_takes_the_code(app):

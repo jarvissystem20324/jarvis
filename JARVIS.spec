@@ -46,6 +46,17 @@ try:
 except Exception:
     pass
 
+# 6.0: natural voices, Word and PDF output, spreadsheets, PC status. All are
+# imported inside functions, so they are listed rather than trusted to be
+# found; docx and fpdf also carry templates and data files of their own.
+for pkg in ("edge_tts", "docx", "fpdf", "openpyxl"):
+    try:
+        datas += collect_data_files(pkg)
+        hiddenimports += [pkg]
+    except Exception:
+        pass
+hiddenimports += ["psutil", "aiohttp", "docx.oxml", "fpdf.fonts"]
+
 a = Analysis(
     ["app.py"],
     pathex=[],

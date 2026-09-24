@@ -1,7 +1,8 @@
 """Voice input/output for JARVIS.
 
-Speech out prefers OpenAI's voices when a paid key is present and falls back to
-the offline Windows voices, so it always works. Speech in walks the provider
+Speech out uses Microsoft's free neural voices (see neural.py), then OpenAI's
+when a paid key is present, then the offline Windows voice, so it always
+works. Privacy mode skips straight to the offline voice. Speech in walks the provider
 chain — Groq's Whisper is free — and can use a locally installed faster-whisper
 for full offline transcription. Playback and recording both run off the calling
 thread so the Tk event loop never blocks.
@@ -17,8 +18,8 @@ import sys
 import threading
 import wave
 
-from . import providers
-from .config import IS_MACOS, get_stt_provider, get_tts_model, get_tts_voice
+from . import neural, providers
+from .config import IS_MACOS, get_setting, get_stt_provider, get_tts_model, get_tts_voice
 
 try:
     import numpy as np
@@ -54,7 +55,11 @@ class Voice:
         self._stop_flag = threading.Event()
         self._lock = threading.Lock()
         self._mic_ok = self._probe_mic()
-        self._tts_ok = _HAS_AUDIO or _HAS_PYTTSX3
+        self._tts_ok = _HAS_AUDIO or _HAS_PYTTSX3 or neural.installed()
+        self._player = neural.Player()
+        # Set after the voice service fails twice in a row, so a dead network
+        # does not cost a timeout on every sentence.
+        self._neural_failures = 0
         # Set False after a key/quota failure so we stop paying the network
         # round-trip on every utterance and go straight to offline speech.
         # Without an OpenAI key there is nothing to try in the first place.
@@ -98,15 +103,21 @@ class Voice:
         text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
         return re.sub(r"\n{2,}", ". ", text).strip()
 
-    def speak(self, text: str, block: bool = False) -> None:
-        """Speak `text`. Returns immediately unless `block` is set."""
+    def speak(self, text: str, block: bool = False, language: str | None = None) -> None:
+        """Speak `text`. Returns immediately unless `block` is set.
+
+        `language` picks the neural voice for it ("tr", "de" …); by default
+        the configured voice, or a Turkish one for Turkish text.
+        """
         clean = self._strip_markdown(text or "")
         if not clean or not self._tts_ok:
             return
 
         self.stop()
         self._stop_flag.clear()
-        thread = threading.Thread(target=self._speak_worker, args=(clean,), daemon=True)
+        thread = threading.Thread(
+            target=self._speak_worker, args=(clean, language), daemon=True
+        )
         with self._lock:
             self._speak_thread = thread
         thread.start()
@@ -116,6 +127,7 @@ class Voice:
     def stop(self) -> None:
         """Interrupt any in-progress speech."""
         self._stop_flag.set()
+        self._player.stop()
         if _HAS_AUDIO:
             try:
                 sd.stop()
@@ -133,11 +145,73 @@ class Voice:
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=2.0)
 
-    def _speak_worker(self, text: str) -> None:
+    def pause(self) -> bool:
+        """Pause natural-voice playback. False if nothing pausable is playing."""
+        return self._player.pause()
+
+    def resume(self) -> bool:
+        return self._player.resume()
+
+    def speaking(self) -> bool:
+        with self._lock:
+            thread = self._speak_thread
+        return bool(thread and thread.is_alive())
+
+    def _speak_worker(self, text: str, language: str | None = None) -> None:
+        if self._speak_neural(text, language):
+            return
+        if self._stop_flag.is_set():
+            return
         if self._openai_tts_ok and self._speak_openai(text):
             return
         if not self._stop_flag.is_set():
             self._speak_offline(text)
+
+    def _speak_neural(self, text: str, language: str | None = None) -> bool:
+        """Speak through the neural voice, a sentence group at a time.
+
+        The next piece is synthesised while the current one plays, so a long
+        answer or a whole document reads without gaps. Returns False only if
+        nothing was spoken, so the caller can fall back to another voice.
+        """
+        from . import security
+
+        if security.privacy.on or not neural.enabled() or self._neural_failures >= 2:
+            return False
+        pieces = neural.chunks(text)
+        if not pieces:
+            return True
+        voice = neural.voice_for(text, language)
+        rate = get_setting("JARVIS_VOICE_RATE", "+0%")
+
+        results: dict[int, bytes | Exception] = {}
+
+        def fetch(index: int) -> None:
+            try:
+                results[index] = neural.synthesize(pieces[index], voice, rate)
+            except Exception as exc:  # network down, service changed
+                results[index] = exc
+
+        fetch(0)
+        if isinstance(results[0], Exception):
+            self._neural_failures += 1
+            return False
+        self._neural_failures = 0
+
+        for index in range(len(pieces)):
+            if self._stop_flag.is_set():
+                return True
+            prefetch = None
+            if index + 1 < len(pieces):
+                prefetch = threading.Thread(target=fetch, args=(index + 1,), daemon=True)
+                prefetch.start()
+            audio = results.pop(index, None)
+            if isinstance(audio, bytes):
+                if not self._player.play(audio, self._stop_flag.is_set):
+                    return index > 0
+            if prefetch is not None:
+                prefetch.join()
+        return True
 
     def _speak_openai(self, text: str) -> bool:
         """Stream PCM from OpenAI straight into the sound device."""

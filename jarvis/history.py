@@ -16,6 +16,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from . import vault
 from .config import get_data_dir, get_output_dir
 
 HISTORY_FILE = "conversation.json"
@@ -75,7 +76,7 @@ def _path(name: str | None = None) -> Path:
     legacy = get_data_dir() / HISTORY_FILE
     if not target.exists() and legacy.is_file() and not any(chats.glob("*.json")):
         try:
-            target.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+            vault.write_bytes(target, legacy.read_bytes())
         except OSError:
             pass
     return target
@@ -87,7 +88,7 @@ def list_chats() -> list[dict]:
     out: list[dict] = []
     for item in _chats_dir().glob("*.json"):
         try:
-            data = json.loads(item.read_text(encoding="utf-8"))
+            data = vault.read_json(item)
         except (OSError, ValueError):
             continue
         if not isinstance(data, dict):
@@ -101,6 +102,30 @@ def list_chats() -> list[dict]:
         })
     out.sort(key=lambda c: c["saved"], reverse=True)
     return out
+
+
+def rename_chat(old: str, new: str) -> str:
+    """Rename a saved conversation. Returns '' on success, else the reason."""
+    new = (new or "").strip()
+    if not new:
+        return "A conversation needs a name."
+    source = _chats_dir() / f"{_slug(old)}.json"
+    target = _chats_dir() / f"{_slug(new)}.json"
+    if target.exists() and target != source:
+        return f"There is already a conversation called '{new}'."
+    if source.exists():
+        try:
+            data = vault.read_json(source)
+            if isinstance(data, dict):
+                data["name"] = new
+                vault.write_json(target, data)
+                if target != source:
+                    source.unlink()
+        except (OSError, ValueError) as exc:
+            return f"Could not rename it: {exc}"
+    if current_name() == old:
+        set_current(new)
+    return ""
 
 
 def delete_chat(name: str) -> bool:
@@ -127,9 +152,8 @@ def save(messages: list[dict], mode: str = "", code_mode: bool = False,
             "summary": summary,
             "messages": messages[-MAX_SAVED_MESSAGES:],
         }
-        _path(name).write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        # Sealed with the Windows login when encryption is on (the default).
+        vault.write_json(_path(name), payload)
     except (OSError, TypeError, ValueError):
         pass
 
@@ -140,7 +164,7 @@ def load(name: str | None = None) -> tuple[list[dict], str, bool]:
     if not path.exists():
         return [], "", False
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = vault.read_json(path)
     except (OSError, ValueError):
         return [], "", False
     if not isinstance(data, dict):
@@ -165,7 +189,7 @@ def load_summary(name: str | None = None) -> str:
     """The running summary saved with a conversation, or ''."""
     path = _path(name)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = vault.read_json(path)
     except (OSError, ValueError):
         return ""
     return str(data.get("summary") or "") if isinstance(data, dict) else ""

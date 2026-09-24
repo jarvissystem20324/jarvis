@@ -140,6 +140,7 @@ class DocumentQA(Addon):
 
         self.path = path
         self.text = text
+        self.source = ""
         self._sent_for = None
         words = len(text.split())
         truncated = (
@@ -165,33 +166,64 @@ class DocumentQA(Addon):
     def summarise(self, ctx, args: str) -> str:
         if not self.text:
             return "No document is open. Use /doc <path> first."
-        return ctx.ask(
+        from jarvis import shield
+
+        cleaned = shield.clean(self.text[:MAX_CONTEXT_CHARS], self._label())
+        summary = ctx.ask(
             "Summarise this document in a short paragraph, then list its key "
-            "points as bullets.\n\n"
-            f"--- {self.path.name} ---\n{self.text[:MAX_CONTEXT_CHARS]}"
+            f"points as bullets.\n\n{shield.RULE}\n{cleaned.wrapped()}"
         )
+        warning = cleaned.warning()
+        return summary + (f"\n\n{warning}" if warning else "")
 
     # --- conversation hook ------------------------------------------------
 
-    def enrich_prompt(self, ctx, text: str) -> str | None:
-        """Attach the document, but not to every message.
+    def open_text(self, title: str, text: str, source: str) -> None:
+        """Open text that did not come from a file — a web page, for /read."""
+        self.path = Path(re.sub(r"[^\w.\- ]+", "_", title)[:80] or "page")
+        self.text = text
+        self.source = source
+        self._sent_for = None
 
-        Re-sending 60k characters on every turn burns a free tier's per-minute
-        token budget within a few messages. Sending it once per conversation
-        is enough: it stays in the history the model already receives.
+    def _label(self) -> str:
+        return getattr(self, "source", "") or (self.path.name if self.path else "document")
+
+    def enrich_prompt(self, ctx, text: str) -> str | None:
+        """Attach the document: whole the first time, then what is relevant.
+
+        Until 6.0 it was attached to the first question only, on the belief
+        that it "stays in the history the model already receives". It does
+        not: the history keeps what you typed, not what addons attached, so
+        from the second question on the model was answering about a document
+        it could no longer see. Re-sending 60k characters every turn would
+        burn a free tier's per-minute budget, so follow-ups get the passages
+        that best match the question instead.
+
+        Either way the text is wrapped as untrusted: a document can contain
+        sentences written to the AI rather than to you.
         """
         if not self.text:
             return None
-        # /clear wipes the history holding the document, so send it again.
+        from jarvis import library, shield
+
+        source = self._label()
         brain = getattr(ctx.jarvis, "brain", None)
         forgotten = not getattr(brain, "history", None)
-        if self._sent_for == self.path and not forgotten:
+        if self._sent_for != self.path or forgotten:
+            self._sent_for = self.path
+            wrapped, _warning = shield.wrap(self.text[:MAX_CONTEXT_CHARS], source)
+            return (f"The user has this document open — use it to answer if relevant.\n"
+                    f"{shield.RULE}\n{wrapped}")
+
+        index = {"passages": [[p.file, p.page, p.text]
+                              for p in library._passages(source, [(0, self.text)])]}
+        hits = library.search(index, text, limit=6)
+        if not hits:
             return None
-        self._sent_for = self.path
-        return (
-            f"The user has this document open — use it to answer if relevant.\n"
-            f"--- {self.path.name} ---\n{self.text[:MAX_CONTEXT_CHARS]}\n--- end ---"
-        )
+        excerpt = "\n…\n".join(p.text for p in hits)
+        wrapped, _warning = shield.wrap(excerpt, source)
+        return (f"Passages from the open document ({source}) that match this "
+                f"question.\n{shield.RULE}\n{wrapped}")
 
 
 ADDON = DocumentQA()

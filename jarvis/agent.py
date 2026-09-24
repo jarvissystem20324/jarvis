@@ -38,6 +38,8 @@ from . import security
 # A runaway loop is the failure mode that matters, so it is bounded twice:
 # by the plan the user approved and by this.
 MAX_STEPS = 24
+# Untracked files that are never anyone's work in progress.
+_CLUTTER = re.compile(r"(^|/)(__pycache__|\.pytest_cache)(/|$)|\.pyc$|\.jarvis-\d{8}_\d{6}\.bak$")
 MAX_FIX_ROUNDS = 4
 STEP_TIMEOUT = 300
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -108,6 +110,9 @@ class Plan:
     risk: str = ""
     # Filled in by the agent before approval: on a branch, or in place.
     where: str = ""
+    # Which provider and model wrote this plan. Shown before approval,
+    # because the model that plans is the one the code is sent to.
+    model: str = ""
 
     @property
     def writes(self) -> list[str]:
@@ -141,6 +146,8 @@ class Plan:
             lines += [f"  {c}" for c in dict.fromkeys(self.commands)]
         if self.where:
             lines += ["", f"Where: {self.where}"]
+        if self.model:
+            lines += [f"Model: {self.model}"]
         if self.risk:
             lines += ["", f"Risk: {self.risk}"]
         return "\n".join(lines)
@@ -202,6 +209,10 @@ class Agent:
     def __init__(self, jarvis):
         self.jarvis = jarvis
         self.plan: Plan | None = None
+        # Every model that did some of the work, in order, for the report.
+        self.models_used: list[str] = []
+        # Why the agent's own model (GLM-5 Turbo by default) was passed over.
+        self.fallback_note = ""
         self.root: Path | None = None
         self.written: list[tuple[Path, Path | None]] = []
         # (original branch, work branch) after a run that used one.
@@ -243,11 +254,16 @@ class Agent:
             )
 
         layout = addon._tree_text(limit=40) if addon else ""
-        answer = self.jarvis.brain.ask_once(
+        self.models_used = []
+        self.fallback_note = ""
+        answer = self._ask(
             f"{PLANNER_PROMPT}\n\nProject: {self.root}\n"
             f"Layout:\n{layout}\n\nTask: {goal}"
         )
         plan = parse_plan(answer)
+        plan.model = self.models_used[-1] if self.models_used else ""
+        if self.fallback_note:
+            plan.model += f"\n  ({self.fallback_note})"
         if not plan.steps:
             raise AgentError(
                 f"I couldn't turn that into a plan.\n\n{plan.risk or plan.goal}"
@@ -255,6 +271,39 @@ class Agent:
         _will, plan.where = self.branch_plan()
         self.plan = plan
         return plan
+
+    def _ask(self, prompt: str) -> str:
+        """One model call, on the agent's own model when it answers.
+
+        JARVIS_AGENT_MODEL names it (GLM-5 Turbo through Blueminds by
+        default). If that model refuses or stays silent, the brain skips it
+        for the session and the current mode's models answer instead.
+        """
+        from . import modes
+
+        brain = self.jarvis.brain
+        try:
+            answer = brain.ask_once(
+                prompt, targets=modes.agent_targets(), target_timeout=modes.AGENT_TIMEOUT
+            )
+        except TypeError:
+            # A brain without per-call targets (the tests' stand-in).
+            answer = brain.ask_once(prompt)
+        used = getattr(brain, "last_answered", lambda: "")()
+        if used:
+            self.models_used.append(used)
+        # Say why the chosen model did not do the work, once, in plain words.
+        wanted = modes.agent_targets()
+        if wanted and used and not any(model in used for _p, model in wanted) and not self.fallback_note:
+            reasons = [p for p in getattr(brain, "last_problems", []) or []
+                       if any(model in p for _p, model in wanted)]
+            if reasons:
+                inside = re.search(r"\(([^()]*)\)\s*$", reasons[0])
+                why = inside.group(1) if inside else reasons[0].split(": ", 1)[-1]
+            else:
+                why = "it failed earlier this session, so it is skipped until restart"
+            self.fallback_note = f"{wanted[0][1]} ({wanted[0][0]}) was not used — {why}"
+        return answer
 
     def _permitted(self, action: str, target: str) -> bool:
         """Is this exact action on this exact target in the approved plan?
@@ -290,7 +339,15 @@ class Agent:
         """(will branch, sentence explaining the decision)."""
         if self.root is None or not (self.root / ".git").exists():
             return False, "Not a git repository, so changes are made in place (/undo reverts them)."
-        code, dirty = self._git("status", "--porcelain")
+        # Clutter does not count: __pycache__ and the agent's own .bak
+        # backups made one /fix run enough to stop every later run from
+        # branching. Your own untracked files still do — if the plan wrote
+        # one on a branch, switching back would take it out of your folder.
+        code, status = self._git("status", "--porcelain")
+        dirty = "\n".join(
+            line for line in status.splitlines()
+            if line.strip() and not (line.startswith("??") and _CLUTTER.search(line[3:].strip().strip('"')))
+        )
         if code != 0:
             return False, "git is unavailable, so changes are made in place (/undo reverts them)."
         if dirty.strip():
@@ -356,6 +413,14 @@ class Agent:
 
         # The files on your branch were never touched, so there is nothing
         # for the file-level undo to restore; /undo deletes the branch instead.
+        # The .bak copies are redundant now — the commit is the record — and
+        # were left behind as clutter in your project.
+        for _path, backup in self.written:
+            if backup is not None:
+                try:
+                    backup.unlink()
+                except OSError:
+                    pass
         self.written = []
         self.last_branch = (original, name)
         return (
@@ -445,7 +510,7 @@ class Agent:
             )
         path = self._resolve(step.target)
 
-        answer = self.jarvis.brain.ask_once(
+        answer = self._ask(
             f"{WORKER_PROMPT}\n\nGoal: {self.plan.goal}\n"
             f"This step: {step.why or 'update ' + step.target}\n"
             f"File to produce: {step.target}\n\n"
@@ -565,6 +630,11 @@ class Agent:
         if self.written:
             lines.append("")
             lines.append(f"{len(self.written)} file(s) changed — /undo puts them back.")
+        used = list(dict.fromkeys(self.models_used))
+        if used:
+            lines.append("Model: " + ", then ".join(used))
+        if self.fallback_note:
+            lines.append(f"  ({self.fallback_note})")
         return "\n".join(lines)
 
     def undo(self) -> str:

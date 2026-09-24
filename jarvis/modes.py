@@ -216,14 +216,44 @@ def targets_for(mode: Mode) -> tuple[tuple[str, str], ...]:
     raw = get_setting(env_key(mode), "").strip()
     if not raw:
         return mode.targets
+    return parse_targets(raw) or mode.targets
 
+
+def parse_targets(raw: str) -> tuple[tuple[str, str], ...]:
+    """'provider:model, provider:model' -> pairs. Malformed parts are dropped.
+
+    Split on the first colon only: model ids contain slashes and sometimes
+    colons of their own ("openrouter/z-ai/glm-5-turbo").
+    """
     picked: list[tuple[str, str]] = []
     for part in raw.split(","):
         provider, _, model = part.strip().partition(":")
         provider, model = provider.strip().lower(), model.strip()
         if provider and model:
             picked.append((provider, model))
-    return tuple(picked) or mode.targets
+    return tuple(picked)
+
+
+# The coding agent's own model, tried before whatever the current mode uses.
+# Chosen by the user for /agent, /fix, /testgen and /trace fix. Blueminds is a
+# relay, and on 2026-09-24 it answered this model with "has not been priced by
+# the administrator yet" — a 400 in a tenth of a second — so the agent falls
+# straight through to the mode's models until Blueminds switches it on, and
+# picks it up without an update the day they do.
+AGENT_ENV = "JARVIS_AGENT_MODEL"
+AGENT_DEFAULT = "blueminds:openrouter/z-ai/glm-5-turbo"
+# A coding step writes whole files, and a relay adds its own latency.
+AGENT_TIMEOUT = 150.0
+
+
+def agent_targets() -> tuple[tuple[str, str], ...]:
+    """The agent's preferred models. 'mode' (or blank) means none of its own."""
+    from .config import get_setting
+
+    raw = get_setting(AGENT_ENV, AGENT_DEFAULT).strip()
+    if raw.lower() in {"", "mode", "auto", "none"}:
+        return ()
+    return parse_targets(raw)
 
 
 def next_mode(current: str) -> Mode:
