@@ -80,7 +80,7 @@ Conversation
   /mini  /zoom in|out   Ctrl+Alt+Space: quick ask from anywhere
 
 Privacy and security
-  /privacy  /redact  /autoweb  /offline  /lock [set|off]  /security  /audit  /scan  /sandbox <file>
+  /privacy  /redact  /autoweb  /lock [set|off]  /security  /audit  /scan  /sandbox <file>
 
 Setup
   /health  /bench  /compare <question>  /stats  /lang  /setup  /keys"""
@@ -548,10 +548,6 @@ class Everyday:
         if text.startswith("/") or len(text) > 400 or security.privacy.on:
             return False
         if self.brain.code_mode or not self.autoweb_enabled():
-            return False
-        from . import providers
-
-        if providers.offline_mode():
             return False
         if not _FRESH.search(text):
             return False

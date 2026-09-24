@@ -202,13 +202,7 @@ itself — so a sum is a sum, not an estimate.
 | `/security` | Current security settings |
 | `/redact [on\|off]` | What was masked in the last request |
 | `/autoweb [on\|off]` | Automatic web search for questions about recent things |
-| `/offline [on\|off]` | Answer with a model running on this PC (Ollama) and nothing else |
 | `/lock [set\|off]` | A PIN to open JARVIS, and an automatic lock when idle (Ctrl+Shift+L) |
-
-**Offline mode.** Install [Ollama](https://ollama.com/download) and run
-`ollama pull llama3.2`. From then on, if every cloud provider fails, the model
-on your PC answers; `/offline on` makes it the only one, so nothing leaves the
-machine and web search and online voices switch off.
 
 **App lock.** `/lock set` chooses a PIN. It is stored only as a salted,
 slow hash; wrong guesses are rate limited; while locked, the chat, shortcuts

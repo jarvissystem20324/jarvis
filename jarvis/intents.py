@@ -158,8 +158,6 @@ def route(text: str) -> tuple[str, bool] | None:
         return "/password", False
     if low in {"lock", "lock jarvis", "lock the app", "lock yourself"}:
         return "/lock", False
-    if re.fullmatch(r"(?:go\s+)?offline(?:\s+mode)?(?:\s+on)?|work\s+offline", low):
-        return "/offline on", False
 
     # --- opening apps and folders (last: the loosest) ---
     m = re.fullmatch(r"(?:open|launch|start)\s+(?:up\s+)?(.+)", t, re.I)

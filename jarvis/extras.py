@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import (
-    calc, clock, history, modes, notes, ocr, pc, providers, reminders, security, shield,
+    calc, clock, history, modes, notes, ocr, pc, reminders, security, shield,
     tidy, weather, websearch,
 )
 from .config import get_setting
@@ -63,7 +63,6 @@ class Extras:
             "todo": lambda: self.todos(args),
             "pr": lambda: self.pull_request(args),
             "look": lambda: self.look(args, routed),
-            "offline": lambda: self.offline(args),
             "suggest": lambda: self.suggest_setting(args),
         }
         handler = handlers.get(name)
@@ -153,7 +152,7 @@ class Extras:
     def follow_ups(self, question: str, reply: str) -> list[str]:
         """Three short next questions, or [] when they would be noise."""
         if (not self.suggest_enabled() or security.privacy.on or self.brain.code_mode
-                or question.startswith("/") or len(reply) < 120 or providers.offline_mode()):
+                or question.startswith("/") or len(reply) < 120):
             return []
         answer = self._quick_ask(
             "Suggest exactly three short follow-up questions the user is likely to ask next "
@@ -287,7 +286,7 @@ class Extras:
         saved = notes.load_notes()
         if saved:
             lines += ["", f"Notes: {len(saved)}. Latest: {saved[-1]['text'][:80]}"]
-        if (self.autoweb_enabled() and not security.privacy.on and not providers.offline_mode()):
+        if self.autoweb_enabled() and not security.privacy.on:
             news = headlines()
             if news:
                 lines += ["", "Headlines"] + [f"  • {title}" for title in news]
@@ -589,26 +588,6 @@ class Extras:
         question = args.strip() or "Describe this image. Mention any text in it."
         security.audit.record("look", Path(source).name)
         return self.brain.ask_once(question, image_b64=base64.b64encode(buffer.getvalue()).decode("ascii"))
-
-    def offline(self, args: str) -> str:
-        wanted = args.strip().lower()
-        models = providers.ollama_models(refresh=True)
-        if wanted in {"on", "off"}:
-            if wanted == "on" and not models:
-                return ("Ollama isn't running on this PC, so there is nothing to answer offline.\n"
-                        "  1. Install it: https://ollama.com/download\n"
-                        "  2. In a terminal: ollama pull llama3.2\n"
-                        "Then /offline on.")
-            self._write_setting("JARVIS_OFFLINE", wanted)
-            self.brain.reset_failures()
-            return ("Offline mode on: only the model on this PC answers. Nothing is sent anywhere, "
-                    "web search is off, and speech uses the Windows voice." if wanted == "on"
-                    else "Offline mode off. The cloud providers answer again; Ollama stays as the last resort.")
-        state = "ON" if providers.offline_mode() else "off"
-        found = f"running, with {', '.join(models[:5])}" if models else "not running"
-        return (f"Offline mode is {state}. Ollama is {found}.\n"
-                "When Ollama is running it is always the last resort if every cloud provider fails. "
-                "/offline on uses it alone.")
 
 
 def headlines(limit: int = 4) -> list[str]:

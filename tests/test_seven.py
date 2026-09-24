@@ -1,7 +1,7 @@
 """7.0: exact answers, the world clock, the tidier, the app lock, OCR merging,
-the conversation tools, the coding commands, offline mode and vision.
+the conversation tools, the coding commands and vision.
 
-No keys, no network: currency rates, the geocoder, Ollama, the model and
+No keys, no network: currency rates, the geocoder, the model and
 Windows OCR are all replaced with stand-ins where they would be reached.
 """
 
@@ -223,29 +223,7 @@ def test_more_languages_are_recognised(tmp_path, marker, label):
     assert module.ADDON._detect_test_command()[1] == label
 
 
-# --- offline mode and vision -----------------------------------------------------------------
-
-def test_a_running_ollama_is_the_last_resort(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "x")
-    monkeypatch.setattr(providers, "ollama_models", lambda refresh=False: ["llama3.2:latest"])
-    chain = providers.chat_chain()
-    assert chain[-1] is providers.OLLAMA
-    assert providers.model_for(providers.OLLAMA) == "llama3.2:latest"
-
-
-def test_offline_mode_uses_nothing_else(monkeypatch):
-    monkeypatch.setenv("GROQ_API_KEY", "x")
-    monkeypatch.setenv("JARVIS_OFFLINE", "on")
-    monkeypatch.setattr(providers, "ollama_models", lambda refresh=False: ["llama3.2"])
-    assert providers.chat_chain() == [providers.OLLAMA]
-    monkeypatch.setattr(providers, "ollama_models", lambda refresh=False: [])
-    assert providers.chat_chain() == []
-
-
-def test_no_ollama_costs_nothing(monkeypatch):
-    monkeypatch.setattr(providers, "ollama_models", lambda refresh=False: [])
-    assert providers.OLLAMA not in providers.chat_chain()
-
+# --- vision ---------------------------------------------------------------------------------
 
 def test_a_busy_gemini_does_not_leave_jarvis_blind(monkeypatch):
     """NVIDIA's chat model cannot see; its vision model can, and now answers

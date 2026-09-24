@@ -59,7 +59,7 @@ RESERVED_COMMANDS = frozenset({
     # 7.0
     "calc", "convert", "clock", "instructions", "pin", "pins", "clip", "ocr", "briefing",
     "tidy", "qr", "stopwatch", "review", "changes", "revert", "explain", "todo", "pr",
-    "look", "offline", "suggest", "edit", "password", "lock", "memory", "mini", "zoom",
+    "look", "suggest", "edit", "password", "lock", "memory", "mini", "zoom",
 })
 
 
