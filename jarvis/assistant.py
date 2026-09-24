@@ -15,6 +15,7 @@ from . import trace as trace_mod
 from .addons import AddonManager
 from .brain import Brain
 from .everyday import HELP, Everyday
+from .extras import Extras
 from .config import voice_enabled_by_default
 from .images import DEFAULT_QUALITY, ImageGenerationError, ImageGenerator
 from .voice import Voice
@@ -30,7 +31,7 @@ class JarvisResponse:
     image_paths: list[Path] = field(default_factory=list)
 
 
-class Jarvis(Everyday):
+class Jarvis(Everyday, Extras):
     def __init__(self, voice_enabled: bool | None = None):
         # Files written by earlier versions are plain JSON; seal them now so
         # encryption covers what is already on disk, not only what is new.
@@ -39,7 +40,7 @@ class Jarvis(Everyday):
 
             data_dir = get_data_dir()
             for pattern in ("chats/*.json", "memory.json", "library/*.json",
-                            "notes.json", "reminders.json", "templates.json"):
+                            "notes.json", "reminders.json", "templates.json", "pins.json"):
                 for path in data_dir.glob(pattern):
                     vault.seal_existing(path.parent, patterns=(path.name,))
         except Exception:
@@ -165,6 +166,8 @@ class Jarvis(Everyday):
                 return JarvisResponse(text="Conversation history cleared.")
 
             if name == "export":
+                if args.strip().lower() in {"html", "pdf"}:
+                    return JarvisResponse(text=self.export_as(args.strip().lower()))
                 if not self.brain.history:
                     return JarvisResponse(text="Nothing to export yet.")
                 path = history.export_markdown(self.brain.history)
@@ -296,6 +299,8 @@ class Jarvis(Everyday):
                 return JarvisResponse(text=self.read_url(url, question.strip()))
 
             everyday = self.everyday_command(name, args)
+            if everyday is None:
+                everyday = self.extras_command(name, args)
             if everyday is not None:
                 if isinstance(everyday, JarvisResponse):
                     return everyday
@@ -1481,6 +1486,7 @@ class Jarvis(Everyday):
             mode=self.brain.mode.name,
             code_mode=self.brain.code_mode,
             summary=self.brain.summary,
+            instructions=self.brain.instructions,
         )
 
     def restore_history(self) -> str:
@@ -1491,6 +1497,7 @@ class Jarvis(Everyday):
             return ""
         self.brain.history = messages
         self.brain.summary = history.load_summary()
+        self.brain.instructions = history.load_instructions()
         if mode:
             self.brain.set_mode(mode)
         if code_mode:

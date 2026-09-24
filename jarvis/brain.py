@@ -89,6 +89,8 @@ class Brain:
         self._slow_targets: set[tuple[str, str]] = set()
         # What earlier, trimmed turns said. Travels in the system prompt.
         self.summary: str = ""
+        # Standing instructions for this conversation only (/instructions).
+        self.instructions: str = ""
 
     # --- public ----------------------------------------------------------
 
@@ -123,6 +125,12 @@ class Brain:
         else:
             parts = [JARVIS_SYSTEM_PROMPT]
         parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
+        if self.instructions:
+            parts.append(
+                "## Standing instructions for this conversation\n"
+                "The user set these for this conversation. Follow them in every "
+                f"reply unless they ask otherwise:\n{self.instructions}"
+            )
 
         if self.summary:
             parts.append(
@@ -277,7 +285,7 @@ class Brain:
         if vision:
             # A text-only model answers an image with an opaque 400. Skipping
             # is both faster and produces an error the user can act on.
-            chain = [p for p in chain if p.vision]
+            chain = [p for p in chain if p.vision or p.vision_model]
         return chain
 
     def _chat_over_chain(
@@ -503,6 +511,8 @@ class Brain:
             chain = [p for p in chain if p.name in self.mode.only_providers]
         for provider in chain:
             model = self._model_override or providers.model_for(provider)
+            if vision and not provider.vision and provider.vision_model:
+                model = provider.vision_model
             if (provider.name, model) in seen:
                 continue
             out.append((provider, model, fallback, False))
@@ -813,3 +823,4 @@ class Brain:
     def clear_history(self) -> None:
         self.history.clear()
         self.summary = ""
+        self.instructions = ""

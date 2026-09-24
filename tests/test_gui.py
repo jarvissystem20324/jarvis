@@ -119,6 +119,107 @@ def test_a_due_reminder_appears_in_the_chat(app, monkeypatch):
     assert shown == [("JARVIS — Reminder", "call Ata")]
 
 
+def _embedded(app) -> list:
+    box = getattr(app.chat_log, "_textbox", app.chat_log)
+    return [box.nametowidget(name) for name in box.window_names()]
+
+
+def test_code_blocks_get_copy_and_save(app):
+    app._append_message("JARVIS", "Try:\n```python\nprint('hi')\n```", is_user=False)
+    app.update()
+    bars = _embedded(app)
+    labels = [child.cget("text") for bar in bars for child in bar.winfo_children()]
+    assert "Copy" in labels and "Save…" in labels
+    copy_button = next(child for bar in bars for child in bar.winfo_children() if child.cget("text") == "Copy")
+    copy_button.invoke()
+    assert app.clipboard_get() == "print('hi')"
+
+
+def test_up_brings_back_the_last_question_and_edit_drops_the_answer(app):
+    app.jarvis.brain.history = [{"role": "user", "content": "what is 2+2"},
+                                {"role": "assistant", "content": "4"}]
+    app.chat_input.delete(0, "end")
+    app._recall_last()
+    assert app.chat_input.get() == "what is 2+2"
+    app.chat_input.delete(0, "end")
+    assert "back in the box" in app._ui_command("/edit")
+    assert app.chat_input.get() == "what is 2+2" and app.jarvis.brain.history == []
+
+
+def test_suggestions_are_clickable(app):
+    sent = []
+    app._run_text = sent.append
+    app._show_suggestions(["How long does it take?", "What flour?"])
+    buttons = [child for bar in _embedded(app) for child in bar.winfo_children()]
+    buttons[1].invoke()
+    assert sent == ["What flour?"]
+
+
+def test_zoom_changes_the_body_text_too(app):
+    """The Text size setting only ever reached headings, bold and code."""
+    start = app._font_size
+    app._zoom(1)
+    assert app._font_size == start + 2
+    assert app.chat_log.cget("font").cget("size") == start + 2
+    app._zoom(0, reset=True)
+    assert app._font_size == start
+
+
+def test_mini_mode_toggles(app):
+    app._toggle_mini()
+    assert app._mini and not app.sidebar_frame.winfo_ismapped()
+    app._toggle_mini()
+    app.update()
+    assert not app._mini
+
+
+def test_a_password_goes_to_the_clipboard_and_nowhere_else(app):
+    text = app._ui_command("/password 24")
+    password = app.clipboard_get()
+    assert len(password) == 24 and password not in text
+    assert password not in _text(app)
+    assert all(password not in m["content"] for m in app.jarvis.brain.history)
+
+
+def test_the_lock_screen_blocks_everything_until_the_pin(app, base):
+    from jarvis import applock
+
+    applock.set_pin("2468")
+    app._lock_now()
+    app.update()
+    assert app._locked
+    app.chat_input.insert(0, "hello")
+    app._send_chat()                       # ignored while locked
+    assert "hello" not in _text(app)
+    entry = app._lock_entry
+    entry.insert(0, "0000")
+    app._lock_attempt()
+    app.update()
+    assert app._locked
+    entry.delete(0, "end")
+    entry.insert(0, "2468")
+    app._lock_attempt()
+    app.update()
+    assert not app._locked
+
+
+def test_the_memory_manager_lists_and_forgets(app):
+    entry = next(e for e in app.jarvis.addons.loaded if e.addon.name == "memory")
+    entry.addon.remember(app.jarvis.addons.ctx, "Ahmed prefers short answers")
+    app._open_memory_manager()
+    app.update()
+    window = [w for w in app.winfo_children() if w.winfo_class() == "CTkToplevel" or "toplevel" in str(w)][-1]
+    assert window.title() == "What JARVIS remembers"
+    window.destroy()
+
+
+def test_quick_ask_opens_a_popup(app):
+    app.quick_ask()
+    app.update()
+    assert app._quick_popup.winfo_exists()
+    app._quick_popup.destroy()
+
+
 def test_find_highlights_and_copy_takes_the_code(app):
     app._append_message("JARVIS", "Use this:\n```python\nprint('hi')\n```", is_user=False)
     assert "match" in app._ui_command("/find print")

@@ -20,7 +20,7 @@ from jarvis.brain import Cancelled
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
-from jarvis import i18n, reminders, schedule, updater
+from jarvis import applock, i18n, intents, reminders, schedule, updater
 from ui import notify, render, theme
 
 ctk.set_default_color_theme("blue")
@@ -99,6 +99,12 @@ class JarvisApp(ctk.CTk):
         )
         self._inline_images: list = []
         self._request_started = time.monotonic()
+        self._font_size = FONT_SIZE
+        self._last_input = ""
+        self._locked = False
+        self._mini = False
+        self._last_activity = time.monotonic()
+        self._suggestion_widgets: list = []
 
         self._build_layout()
         self.refresh_mode()
@@ -122,6 +128,13 @@ class JarvisApp(ctk.CTk):
         self.chat_input.focus_set()
 
         self._enable_drag_and_drop()
+        # App lock: straight to the PIN screen if one is set, and again
+        # whenever the window has sat idle for too long.
+        for sequence in ("<Any-KeyPress>", "<Motion>", "<Button>"):
+            self.bind_all(sequence, self._touch, add="+")
+        if applock.enabled():
+            self.after(50, self._lock_now)
+        self.after(30_000, self._check_idle)
         # Scheduled tasks run only while this window is open, by design.
         schedule.scheduler.start(self._run_scheduled)
         reminders.board.start(self._reminder_fired)
@@ -140,6 +153,7 @@ class JarvisApp(ctk.CTk):
 
         # Sidebar
         sidebar = ctk.CTkFrame(self, fg_color=COLORS["panel"], width=220, corner_radius=0)
+        self.sidebar_frame = sidebar
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
 
@@ -335,7 +349,7 @@ class JarvisApp(ctk.CTk):
         self.chat_log = ctk.CTkTextbox(
             self.chat_frame,
             wrap="word",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(size=FONT_SIZE),
             fg_color=COLORS["panel"],
             text_color=COLORS["text"],
             activate_scrollbars=True,
@@ -356,6 +370,7 @@ class JarvisApp(ctk.CTk):
         )
         self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.chat_input.bind("<Return>", lambda e: self._send_chat())
+        self.chat_input.bind("<Up>", self._recall_last)
 
         self.mic_btn = ctk.CTkButton(
             input_row,
@@ -393,9 +408,11 @@ class JarvisApp(ctk.CTk):
 
         # A row of things you otherwise have to remember a command for.
         quick = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
+        self.quick_row = quick
         quick.grid(row=2, column=1, sticky="ew", padx=16, pady=(0, 10))
         for label, command in (
             ("☰ Chats", self._toggle_chat_list),
+            ("📌 Pin", lambda: self._run_text("/pin")),
             ("⧉ Copy reply", lambda: self._quick(self._copy_last(""))),
             ("⧉ Copy code", lambda: self._quick(self._copy_last("code"))),
             ("⌕ Find", self._prompt_find),
@@ -404,7 +421,7 @@ class JarvisApp(ctk.CTk):
             ("📎 Attach", self._choose_file),
         ):
             ctk.CTkButton(
-                quick, text=label, height=26, width=96,
+                quick, text=label, height=26, width=0,
                 font=ctk.CTkFont(size=11),
                 fg_color="transparent", hover_color=COLORS["accent_dim"],
                 text_color=COLORS["muted"], command=command,
@@ -478,11 +495,12 @@ class JarvisApp(ctk.CTk):
     def _new_chat(self) -> None:
         if self._busy:
             return
-        dialog = ctk.CTkInputDialog(text="Name for the new conversation:", title="New conversation")
-        name = (dialog.get_input() or "").strip()
-        if not name:
-            return
-        self.jarvis.chats(f"new {name}")
+        dialog = ctk.CTkInputDialog(text="Name for the new conversation\n(leave empty and JARVIS names it):",
+                                    title="New conversation")
+        name = dialog.get_input()
+        if name is None:
+            return          # cancelled
+        self.jarvis.chats(f"new {name.strip()}".strip())
         self._render_conversation()
 
     def _chat_menu(self, event, name: str) -> None:
@@ -547,6 +565,19 @@ class JarvisApp(ctk.CTk):
         threading.Thread(target=reminders.ring, args=(item.kind,), daemon=True).start()
 
     def _show_reminder(self, item) -> None:
+        if item.kind == "briefing":
+            # Daily: give it now, and book tomorrow's.
+            reminders.board.add("briefing", "Morning briefing", item.due + 86400)
+
+            def work():
+                text = self.jarvis.briefing("")
+                safe_after(self, lambda: self._append_message("JARVIS", text, is_user=False, record=False))
+                if self.jarvis.voice_enabled:
+                    self.jarvis.voice.speak(text)
+
+            threading.Thread(target=work, daemon=True).start()
+            notify.toast("JARVIS — Good morning", "Your briefing is ready.")
+            return
         icon = {"timer": "⏱", "alarm": "⏰"}.get(item.kind, "🔔")
         title = {"timer": "Timer done", "alarm": "Alarm"}.get(item.kind, "Reminder")
         text = item.text or title
@@ -565,6 +596,472 @@ class JarvisApp(ctk.CTk):
         self._append_message("JARVIS", f"While I was closed, these came due:\n{lines}",
                              is_user=False, record=False)
         reminders.board.missed = []
+
+    # --- 7.0: editing, suggestions, titles ---------------------------------
+
+    def _recall_last(self, _event=None):
+        """Up in an empty box brings back the last thing you sent."""
+        if self.chat_input.get().strip():
+            return None
+        last = next((m["content"] for m in reversed(self.jarvis.brain.history)
+                     if m.get("role") == "user"), self._last_input)
+        if last:
+            self.chat_input.insert(0, last)
+            self.chat_input.icursor("end")
+        return "break"
+
+    def _edit_last(self) -> str:
+        question = self.jarvis.forget_last_exchange()
+        if not question:
+            return "There's nothing to edit yet."
+        self.jarvis.save_history()
+        self.chat_input.delete(0, "end")
+        self.chat_input.insert(0, question)
+        self.chat_input.icursor("end")
+        self.chat_input.focus_set()
+        return "Your last question is back in the box — change it and press Enter. The old answer was dropped."
+
+    def _clear_suggestions(self) -> None:
+        for widget in self._suggestion_widgets:
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+        self._suggestion_widgets = []
+
+    def _after_reply(self, question: str, reply: str) -> None:
+        token = self._request_id
+
+        def work():
+            suggestions = []
+            try:
+                suggestions = self.jarvis.follow_ups(question, reply)
+            except Exception:
+                pass
+            if suggestions:
+                safe_after(self, lambda: self._request_id == token and self._show_suggestions(suggestions))
+            try:
+                title = self.jarvis.title_conversation()
+            except Exception:
+                title = ""
+            if title:
+                safe_after(self, self._refresh_chat_list)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_suggestions(self, suggestions: list[str]) -> None:
+        if self._busy:
+            return
+        self._clear_suggestions()
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        bar = tkinter.Frame(textbox, bg=COLORS["panel"])
+        for text in suggestions:
+            tkinter.Button(bar, text=text, command=lambda t=text: self._run_text(t), relief="flat", bd=0,
+                           bg=COLORS["bg"], fg=COLORS["accent"], activebackground=COLORS["accent_dim"],
+                           font=("Segoe UI", 10), padx=10, pady=3, cursor="hand2",
+                           wraplength=520, justify="left").pack(anchor="w", pady=2)
+        self.chat_log.configure(state="normal")
+        textbox.window_create("end", window=bar, padx=4)
+        textbox.insert("end", "\n\n")
+        self.chat_log.configure(state="disabled")
+        self.chat_log.see("end")
+        self._suggestion_widgets = [bar]
+
+    # --- 7.0: zoom, mini mode ------------------------------------------------
+
+    def _zoom(self, step: int, reset: bool = False) -> None:
+        from ui import theme as _theme
+
+        size = FONT_SIZE if reset else self._font_size + 2 * step
+        size = max(_theme.MIN_FONT, min(_theme.MAX_FONT + 8, size))
+        self._font_size = size
+        try:
+            self.chat_log.configure(font=ctk.CTkFont(size=size))
+        except Exception:
+            pass
+        self._configure_tags()
+        self.status_label.configure(text=f"Text size {size}")
+
+    def _toggle_mini(self) -> None:
+        """A small window that stays on top of whatever you are doing."""
+        self._mini = not self._mini
+        if self._mini:
+            self._normal_geometry = self.geometry()
+            self.sidebar_frame.grid_remove()
+            self.chat_list_panel.grid_remove()
+            self.quick_row.grid_remove()
+            self.minsize(360, 420)
+            self.geometry("440x620")
+            self.attributes("-topmost", True)
+        else:
+            self.attributes("-topmost", False)
+            self.sidebar_frame.grid()
+            if self._chat_list_shown:
+                self.chat_list_panel.grid()
+            self.quick_row.grid()
+            self.minsize(900, 600)
+            self.geometry(getattr(self, "_normal_geometry", "1100x720"))
+
+    # --- 7.0: quick ask -------------------------------------------------------
+
+    def quick_ask(self) -> None:
+        """A small box over whatever you are doing. Called by the hotkey addon."""
+        if self._locked:
+            self.summon()
+            return
+        existing = getattr(self, "_quick_popup", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        popup = ctk.CTkToplevel(self)
+        self._quick_popup = popup
+        popup.title("Ask JARVIS")
+        popup.attributes("-topmost", True)
+        width = 560
+        x = (popup.winfo_screenwidth() - width) // 2
+        popup.geometry(f"{width}x96+{x}+140")
+        popup.configure(fg_color=COLORS["panel"])
+        entry = ctk.CTkEntry(popup, height=40, font=ctk.CTkFont(size=15),
+                             placeholder_text="Ask JARVIS…  (Enter to ask, Esc to close)")
+        entry.pack(fill="x", padx=12, pady=(12, 6))
+        answer = ctk.CTkTextbox(popup, height=10, wrap="word", fg_color=COLORS["bg"],
+                                font=ctk.CTkFont(size=13))
+
+        def ask(_event=None):
+            question = entry.get().strip()
+            if not question:
+                return
+            entry.configure(state="disabled")
+            popup.geometry(f"{width}x380+{x}+140")
+            answer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+            answer.delete("1.0", "end")
+            answer.insert("end", "Thinking…")
+
+            def work():
+                try:
+                    reply = self.jarvis.process(question).text
+                except Exception as exc:
+                    reply = f"Error: {exc}"
+
+                def show():
+                    if not popup.winfo_exists():
+                        return
+                    answer.delete("1.0", "end")
+                    answer.insert("end", reply)
+                    entry.configure(state="normal")
+                    entry.delete(0, "end")
+                    # Also in the main window, so the exchange is not lost.
+                    self._append_message("You", question, is_user=True)
+                    self._append_message("JARVIS", reply, is_user=False)
+                    try:
+                        self.jarvis.save_history()
+                    except Exception:
+                        pass
+
+                safe_after(self, show)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        entry.bind("<Return>", ask)
+        popup.bind("<Escape>", lambda _e: popup.destroy())
+        popup.after(120, lambda: (popup.lift(), popup.focus_force(), entry.focus_set()))
+
+    # --- 7.0: text from the screen ----------------------------------------------
+
+    def _ocr_region(self) -> None:
+        """Hide, take a screenshot, let a box be dragged over it, read the box."""
+        from PIL import ImageGrab, ImageTk
+
+        from jarvis import ocr
+
+        if not ocr.available():
+            self._append_message("JARVIS", "Reading text from the screen needs Windows' built-in OCR.",
+                                 is_user=False, record=False)
+            return
+        self.withdraw()
+        self.update()
+        time.sleep(0.25)
+        shot = ImageGrab.grab(all_screens=True)
+        try:
+            import ctypes
+
+            metrics = ctypes.windll.user32.GetSystemMetrics
+            left, top = metrics(76), metrics(77)          # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN
+        except Exception:
+            left, top = 0, 0
+        overlay = tkinter.Toplevel(self)
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.geometry(f"{shot.width}x{shot.height}+{left}+{top}")
+        dimmed = shot.point(lambda v: int(v * 0.6))
+        photo = ImageTk.PhotoImage(dimmed)
+        canvas = tkinter.Canvas(overlay, width=shot.width, height=shot.height, highlightthickness=0,
+                                cursor="crosshair")
+        canvas.pack()
+        canvas.create_image(0, 0, image=photo, anchor="nw")
+        canvas.image = photo
+        canvas.create_text(shot.width // 2, 40, text="Drag a box around the text  ·  Esc cancels",
+                           fill="white", font=("Segoe UI", 16, "bold"))
+        state = {"start": None, "rect": None}
+
+        def finish(box=None):
+            overlay.destroy()
+            self.deiconify()
+            self.lift()
+            if box is None:
+                return
+            self._set_busy(True, "Reading the text…")
+
+            def work():
+                try:
+                    text = ocr.read_image_from(shot.crop(box))
+                except Exception as exc:
+                    text, error = "", str(exc)
+                else:
+                    error = ""
+
+                def show():
+                    self._set_busy(False)
+                    if error:
+                        self._append_message("JARVIS", error, is_user=False, record=False)
+                    elif not text:
+                        self._append_message("JARVIS", "I couldn't find any text in that box.",
+                                             is_user=False, record=False)
+                    else:
+                        self.clipboard_clear()
+                        self.clipboard_append(text)
+                        self._append_message("JARVIS", f"Copied to your clipboard (read on this PC):\n\n{text}",
+                                             is_user=False)
+
+                safe_after(self, show)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def press(event):
+            state["start"] = (event.x, event.y)
+            state["rect"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
+                                                    outline="#22d3ee", width=2)
+
+        def drag(event):
+            if state["rect"] is not None:
+                x0, y0 = state["start"]
+                canvas.coords(state["rect"], x0, y0, event.x, event.y)
+
+        def release(event):
+            if state["start"] is None:
+                return finish()
+            x0, y0 = state["start"]
+            box = (min(x0, event.x), min(y0, event.y), max(x0, event.x), max(y0, event.y))
+            if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+                return finish()
+            finish(box)
+
+        canvas.bind("<ButtonPress-1>", press)
+        canvas.bind("<B1-Motion>", drag)
+        canvas.bind("<ButtonRelease-1>", release)
+        overlay.bind("<Escape>", lambda _e: finish())
+        overlay.after(50, overlay.focus_force)
+
+    # --- 7.0: memory manager ------------------------------------------------------
+
+    def _open_memory_manager(self) -> None:
+        entry = next((e for e in self.jarvis.addons.loaded if e.addon.name == "memory"), None)
+        if entry is None:
+            self._quick("The memory addon isn't loaded.")
+            return
+        addon, ctx = entry.addon, self.jarvis.addons.ctx
+        window = ctk.CTkToplevel(self)
+        window.title("What JARVIS remembers")
+        window.geometry("620x560")
+        window.configure(fg_color=COLORS["bg"])
+        window.transient(self)
+        ctk.CTkLabel(window, text="What JARVIS remembers about you", font=ctk.CTkFont(size=18, weight="bold"),
+                     text_color=COLORS["accent"]).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(window, text="Sent as context with your messages (never in Privacy mode). "
+                                  "Encrypted with your Windows login.",
+                     font=ctk.CTkFont(size=11), text_color=COLORS["muted"]).pack(anchor="w", padx=18)
+        body = ctk.CTkScrollableFrame(window, fg_color=COLORS["panel"])
+        body.pack(fill="both", expand=True, padx=16, pady=10)
+        add_row = ctk.CTkFrame(window, fg_color="transparent")
+        add_row.pack(fill="x", padx=16, pady=(0, 14))
+        new_fact = ctk.CTkEntry(add_row, height=34, placeholder_text="Add a fact, e.g. I prefer short answers")
+        new_fact.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        def refresh():
+            for child in body.winfo_children():
+                child.destroy()
+            facts = addon._load(ctx)
+            if not facts:
+                ctk.CTkLabel(body, text="Nothing yet.", text_color=COLORS["muted"]).pack(pady=20)
+            for number, fact in enumerate(facts, 1):
+                row = ctk.CTkFrame(body, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                ctk.CTkLabel(row, text=str(fact.get("fact") or fact.get("text") or fact), anchor="w",
+                             justify="left", wraplength=470, text_color=COLORS["text"]).pack(
+                    side="left", fill="x", expand=True, padx=6)
+                ctk.CTkButton(row, text="Forget", width=64, height=26, fg_color="transparent",
+                              hover_color=COLORS["error"],
+                              command=lambda n=number: (addon.forget(ctx, str(n)), refresh())).pack(side="right")
+
+        def add(_event=None):
+            text = new_fact.get().strip()
+            if text:
+                message = addon.remember(ctx, text)
+                new_fact.delete(0, "end")
+                if "stored" not in message.lower() and "remember" not in message.lower():
+                    self._quick(message)
+                refresh()
+
+        ctk.CTkButton(add_row, text="Remember", width=100, height=34, fg_color=COLORS["accent_dim"],
+                      hover_color=COLORS["accent"], command=add).pack(side="right")
+        new_fact.bind("<Return>", add)
+        refresh()
+        window.after(200, window.lift)
+
+    # --- 7.0: passwords -----------------------------------------------------------
+
+    def _make_password(self, args: str) -> str:
+        """Straight to the clipboard: never shown, saved, or sent to an AI."""
+        import secrets
+        import string
+
+        words = args.lower().split()
+        length = next((int(w) for w in words if w.isdigit()), 20)
+        length = max(8, min(128, length))
+        symbols = "no symbols" not in args.lower() and "nosymbols" not in words
+        pools = [string.ascii_lowercase, string.ascii_uppercase, string.digits]
+        if symbols:
+            pools.append("!@#$%^&*-_=+?")
+        alphabet = "".join(pools)
+        while True:
+            password = "".join(secrets.choice(alphabet) for _ in range(length))
+            if all(any(c in pool for c in password) for pool in pools):
+                break
+        self.clipboard_clear()
+        self.clipboard_append(password)
+
+        def forget():
+            try:
+                if self.clipboard_get() == password:
+                    self.clipboard_clear()
+            except tkinter.TclError:
+                pass
+
+        self.after(60_000, forget)
+        bits = int(length * __import__("math").log2(len(alphabet)))
+        return (f"A {length}-character password ({bits} bits) is on your clipboard — paste it now.\n"
+                "It was not shown, saved or sent anywhere, and the clipboard is cleared in 60 seconds.")
+
+    # --- 7.0: app lock ------------------------------------------------------------
+
+    def _touch(self, _event=None) -> None:
+        self._last_activity = time.monotonic()
+
+    def _check_idle(self) -> None:
+        try:
+            if (applock.enabled() and not self._locked
+                    and time.monotonic() - self._last_activity > applock.idle_minutes() * 60):
+                self._lock_now()
+        finally:
+            self.after(30_000, self._check_idle)
+
+    def _lock_command(self, args: str) -> str:
+        verb = args.strip().lower()
+        if verb in {"set", "change", "pin"}:
+            self.after(50, self._set_pin_dialog)
+            return "Choose a PIN in the window that opened."
+        if verb in {"off", "remove"}:
+            if not applock.enabled():
+                return "There is no PIN set."
+            self.after(50, lambda: self._pin_dialog("Current PIN to remove the lock:", self._remove_lock))
+            return "Enter your current PIN to remove it."
+        if not applock.enabled():
+            self.after(50, self._set_pin_dialog)
+            return "Set a PIN first — then /lock (or Ctrl+Shift+L) locks JARVIS."
+        self._lock_now()
+        return "Locked."
+
+    def _pin_dialog(self, prompt: str, on_pin) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("JARVIS")
+        dialog.geometry("320x150")
+        dialog.transient(self)
+        dialog.configure(fg_color=COLORS["panel"])
+        ctk.CTkLabel(dialog, text=prompt, text_color=COLORS["text"]).pack(pady=(16, 6))
+        entry = ctk.CTkEntry(dialog, show="•", width=180, justify="center")
+        entry.pack()
+
+        def done(_event=None):
+            value = entry.get()
+            dialog.destroy()
+            on_pin(value)
+
+        entry.bind("<Return>", done)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        dialog.after(150, lambda: (dialog.lift(), dialog.grab_set(), entry.focus_set()))
+
+    def _set_pin_dialog(self) -> None:
+        def second(first: str):
+            def confirm(again: str):
+                if first != again:
+                    self._append_message("JARVIS", "The two PINs didn't match. Nothing changed.",
+                                         is_user=False, record=False)
+                    return
+                self._append_message("JARVIS", applock.set_pin(first), is_user=False, record=False)
+
+            self._pin_dialog("The same PIN again:", confirm)
+
+        self._pin_dialog(f"New PIN ({applock.MIN_LENGTH}+ digits):", second)
+
+    def _remove_lock(self, pin: str) -> None:
+        if applock.check(pin):
+            applock.remove()
+            self._append_message("JARVIS", "App lock removed.", is_user=False, record=False)
+        else:
+            self._append_message("JARVIS", "That PIN is wrong. The lock stays.", is_user=False, record=False)
+
+    def _lock_now(self) -> None:
+        if self._locked or not applock.enabled():
+            return
+        self._locked = True
+        try:
+            self.jarvis.voice.stop()
+        except Exception:
+            pass
+        cover = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
+        cover.place(relx=0, rely=0, relwidth=1, relheight=1)
+        cover.lift()
+        box = ctk.CTkFrame(cover, fg_color=COLORS["panel"], corner_radius=12)
+        box.place(relx=0.5, rely=0.45, anchor="center")
+        ctk.CTkLabel(box, text="🔒  JARVIS is locked", font=ctk.CTkFont(size=20, weight="bold"),
+                     text_color=COLORS["accent"]).pack(padx=40, pady=(24, 6))
+        message = ctk.CTkLabel(box, text="Enter your PIN", text_color=COLORS["muted"])
+        message.pack()
+        entry = ctk.CTkEntry(box, show="•", width=200, height=38, justify="center",
+                             font=ctk.CTkFont(size=18))
+        entry.pack(padx=40, pady=(10, 24))
+
+        def attempt(_event=None):
+            wait = applock.wait_seconds()
+            if wait > 0:
+                message.configure(text=f"Too many tries — wait {int(wait) + 1}s", text_color=COLORS["error"])
+                return
+            if applock.check(entry.get()):
+                self._locked = False
+                self._last_activity = time.monotonic()
+                cover.destroy()
+                self.chat_input.focus_set()
+            else:
+                entry.delete(0, "end")
+                wait = applock.wait_seconds()
+                message.configure(text=f"Wrong PIN — wait {int(wait) + 1}s" if wait else "Wrong PIN",
+                                  text_color=COLORS["error"])
+
+        entry.bind("<Return>", attempt)
+        self._lock_cover = cover
+        self._lock_entry, self._lock_attempt = entry, attempt
+        self.after(100, entry.focus_set)
 
     def _quick(self, message: str) -> None:
         """Report the result of a toolbar button without cluttering the chat."""
@@ -688,7 +1185,7 @@ class JarvisApp(ctk.CTk):
     def _configure_tags(self) -> None:
         """Define every text tag. CTkTextbox wraps a tk.Text underneath."""
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
-        render.configure_tags(textbox, COLORS, FONT_SIZE)
+        render.configure_tags(textbox, COLORS, getattr(self, "_font_size", FONT_SIZE))
 
     def _show_tab(self, tab: str) -> None:
         self.active_tab = tab
@@ -777,10 +1274,44 @@ class JarvisApp(ctk.CTk):
             # question is usually punctuation, not formatting.
             textbox.insert("end", f"{text}\n\n")
         else:
-            render.insert(textbox, text, COLORS)
+            render.insert(textbox, text, COLORS, on_code=self._code_buttons)
             textbox.insert("end", "\n")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
+
+    def _code_buttons(self, textbox, code: str, language: str, label: str) -> None:
+        """Copy and Save under every code block."""
+        bar = tkinter.Frame(textbox, bg=COLORS["panel"])
+        style = dict(bg=COLORS["accent_dim"], fg=COLORS["text"], relief="flat", bd=0,
+                     padx=8, pady=1, font=("Segoe UI", 9), cursor="hand2",
+                     activebackground=COLORS["accent"])
+
+        def copy() -> None:
+            self.clipboard_clear()
+            self.clipboard_append(code)
+            copy_btn.configure(text="Copied ✓")
+            self.after(1500, lambda: copy_btn.winfo_exists() and copy_btn.configure(text="Copy"))
+
+        def save() -> None:
+            from tkinter import filedialog
+
+            suffix = {"python": ".py", "py": ".py", "javascript": ".js", "js": ".js", "ts": ".ts",
+                      "typescript": ".ts", "html": ".html", "css": ".css", "json": ".json",
+                      "bash": ".sh", "sh": ".sh", "powershell": ".ps1", "ps1": ".ps1", "sql": ".sql",
+                      "java": ".java", "c": ".c", "cpp": ".cpp", "cs": ".cs", "go": ".go",
+                      "rust": ".rs", "yaml": ".yml", "markdown": ".md"}.get(language, ".txt")
+            initial = Path(label).name if "." in Path(label).name else f"snippet{suffix}"
+            chosen = filedialog.asksaveasfilename(parent=self, initialfile=initial,
+                                                  defaultextension=Path(initial).suffix or suffix)
+            if chosen:
+                Path(chosen).write_text(code + "\n", encoding="utf-8")
+                self._quick(f"Saved {Path(chosen).name}")
+
+        copy_btn = tkinter.Button(bar, text="Copy", command=copy, **style)
+        copy_btn.pack(side="left", padx=(0, 4))
+        tkinter.Button(bar, text="Save…", command=save, **style).pack(side="left")
+        textbox.window_create("end", window=bar, padx=18)
+        textbox.insert("end", "\n")
 
     def _report_env_migration(self) -> None:
         """Say so when the update brought an older settings file forward."""
@@ -1002,7 +1533,7 @@ class JarvisApp(ctk.CTk):
     # --- push to talk -----------------------------------------------------
 
     def _ptt_down(self, _event=None) -> None:
-        if self._recording or self._busy:
+        if self._recording or self._busy or self._locked:
             return
         if not self.jarvis.voice.start_push_to_talk():
             self._quick("No microphone is available.")
@@ -1094,6 +1625,11 @@ class JarvisApp(ctk.CTk):
         ("Hold F9", "Push to talk — speak, then release"),
         ("Ctrl+O", "Attach a file"),
         ("Ctrl+B", "Show or hide the conversation list"),
+        ("Up", "In an empty box: bring back your last message"),
+        ("Ctrl+= / Ctrl+-", "Bigger / smaller text (Ctrl+0 resets)"),
+        ("Ctrl+Shift+M", "Mini mode — small, always on top"),
+        ("Ctrl+Shift+L", "Lock JARVIS (needs a PIN: /lock set)"),
+        ("Ctrl+Alt+Space", "Quick question from anywhere"),
         ("Ctrl+Alt+J", "Bring JARVIS to the front, from anywhere"),
         ("Hold Ctrl+Alt+D", "Dictate into any app — speak, release, it types"),
     )
@@ -1111,6 +1647,12 @@ class JarvisApp(ctk.CTk):
             "<Escape>": lambda e: self._stop(),
             "<Control-o>": lambda e: self._choose_file(),
             "<Control-b>": lambda e: self._toggle_chat_list(),
+            "<Control-equal>": lambda e: self._zoom(1),
+            "<Control-plus>": lambda e: self._zoom(1),
+            "<Control-minus>": lambda e: self._zoom(-1),
+            "<Control-Key-0>": lambda e: self._zoom(0, reset=True),
+            "<Control-M>": lambda e: self._toggle_mini(),
+            "<Control-L>": lambda e: self._lock_command(""),
         }
         # Push-to-talk is a press/release pair rather than a toggle, so it
         # cannot be expressed in the table above.
@@ -1123,7 +1665,9 @@ class JarvisApp(ctk.CTk):
         for sequence, handler in bindings.items():
             try:
                 # "break" stops Tk also inserting the character into the entry.
-                self.bind_all(sequence, lambda e, h=handler: (h(e), "break")[1])
+                # Locked means locked: Ctrl+Shift+C would otherwise copy the
+                # last answer out from behind the PIN screen.
+                self.bind_all(sequence, lambda e, h=handler: (None if self._locked else h(e), "break")[1])
             except tkinter.TclError:
                 pass
 
@@ -1148,6 +1692,25 @@ class JarvisApp(ctk.CTk):
             return self._copy_last(args)
         if name == "setup":
             return self._setup_text()
+        if name == "edit":
+            return self._edit_last()
+        if name == "password":
+            return self._make_password(args)
+        if name == "lock":
+            return self._lock_command(args)
+        if name == "memory":
+            self._open_memory_manager()
+            return "Opened the memory manager."
+        if name == "mini":
+            self._toggle_mini()
+            return "Mini mode " + ("on — Ctrl+Shift+M to leave." if self._mini else "off.")
+        if name == "zoom":
+            step = {"in": 1, "+": 1, "out": -1, "-": -1}.get(args.strip().lower(), 0)
+            self._zoom(step)
+            return f"Text size {self._font_size}."
+        if name == "ocr" and not args.strip():
+            self.after(50, self._ocr_region)
+            return "Drag a box around the text you want. Escape cancels."
         if name in {"keys", "shortcuts"}:
             return "Keyboard shortcuts:\n" + "\n".join(
                 f"  {key:<16} {what}" for key, what in self.SHORTCUTS
@@ -1411,14 +1974,14 @@ class JarvisApp(ctk.CTk):
         # Rendered, not inserted raw. 4.0 said streamed replies were
         # formatted; only restored history ever was, because this line wrote
         # the finished text as plain characters over the streamed body.
-        render.insert(textbox, text, COLORS)
+        render.insert(textbox, text, COLORS, on_code=self._code_buttons)
         textbox.insert("end", "\n")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
         self._last_reply = text
 
     def _send_chat(self) -> None:
-        if self._busy:
+        if self._busy or self._locked:
             return
         text = self.chat_input.get().strip()
         if not text:
@@ -1431,6 +1994,20 @@ class JarvisApp(ctk.CTk):
         # A traceback is many lines and the message box holds one, so a bare
         # /trace reads it off the clipboard. Done here, on the Tk thread,
         # because the clipboard is not safe to touch from a worker.
+        self._last_input = text
+        self._clear_suggestions()
+        # Plain words for things only the window can do ("copy text from the
+        # screen", "generate a password", "lock") become their command.
+        routed = intents.route(text) if not text.startswith("/") else None
+        if routed and routed[0].split()[0] in {"/ocr", "/password", "/lock"}:
+            text = routed[0]
+        # /clip works on whatever is on the clipboard; only the window can read it.
+        if text.lower().startswith("/clip"):
+            try:
+                clipped = self.clipboard_get()
+            except tkinter.TclError:
+                clipped = ""
+            text = f"{text}\n{clipped}"
         if text.strip().lower() == "/trace":
             try:
                 pasted = self.clipboard_get()
@@ -1501,6 +2078,7 @@ class JarvisApp(ctk.CTk):
             self._show_image_preview(paths[0])
             self._load_gallery()
 
+        self._after_reply(self._last_input, response.text)
         elapsed = time.monotonic() - getattr(self, "_request_started", time.monotonic())
         if elapsed > NOTIFY_AFTER_SECONDS and self.focus_displayof() is None:
             notify.answer_ready(self, self.jarvis.brain.mode.label, elapsed)

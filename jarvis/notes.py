@@ -81,6 +81,59 @@ def delete_note(which: str) -> str:
     return f"Deleted: {removed['text'][:80]}"
 
 
+# --- pins --------------------------------------------------------------------
+# Answers worth keeping, across every conversation. Sealed like notes.
+
+PINS_FILE = "pins.json"
+
+
+def _pins_path():
+    return get_data_dir() / PINS_FILE
+
+
+def load_pins() -> list[dict]:
+    path = _pins_path()
+    if not path.exists():
+        return []
+    try:
+        data = vault.read_json(path)
+    except (OSError, ValueError):
+        return []
+    return [p for p in data if isinstance(p, dict) and p.get("text")] if isinstance(data, list) else []
+
+
+def add_pin(text: str, chat: str) -> str:
+    pins = load_pins()
+    pins.append({"text": text.strip()[:20000], "chat": chat, "at": time.time()})
+    vault.write_json(_pins_path(), pins[-500:])
+    first = text.strip().splitlines()[0][:70] if text.strip() else ""
+    return f"📌 Pinned ({len(pins)}): {first}{'…' if len(text) > 70 else ''}\n/pins lists them."
+
+
+def list_pins(search: str = "") -> str:
+    pins = load_pins()
+    needle = search.lower()
+    shown = [(i, p) for i, p in enumerate(pins, 1) if not needle or needle in p["text"].lower()]
+    if not shown:
+        return "Nothing pinned yet. /pin pins the last answer." if not pins else f"No pin mentions '{search}'."
+    lines = [f"Pinned ({len(shown)}):"]
+    for index, pin in shown[-30:]:
+        when = datetime.fromtimestamp(float(pin.get("at") or 0)).strftime("%d %b")
+        lines.append(f"\n  {index}. [{pin.get('chat', '?')}, {when}]")
+        lines += [f"     {line}" for line in pin["text"].strip().splitlines()[:8]]
+    lines.append("\n/pins <word> searches, /pins delete <n> unpins.")
+    return "\n".join(lines)
+
+
+def delete_pin(which: str) -> str:
+    pins = load_pins()
+    if not which.strip().isdigit() or not 1 <= int(which) <= len(pins):
+        return f"There is no pin {which}. /pins lists them."
+    removed = pins.pop(int(which) - 1)
+    vault.write_json(_pins_path(), pins)
+    return f"Unpinned: {removed['text'].splitlines()[0][:70]}"
+
+
 # --- templates ---------------------------------------------------------------
 
 BUILT_IN = {

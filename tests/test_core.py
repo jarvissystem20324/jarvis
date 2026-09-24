@@ -376,7 +376,7 @@ def addons(base):
 
 def test_every_bundled_addon_loads(addons):
     assert not addons.errors
-    assert len(addons.loaded) == 7
+    assert len(addons.loaded) == 8
 
 
 def test_the_team_is_known(addons):

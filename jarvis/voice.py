@@ -178,6 +178,8 @@ class Voice:
 
         if security.privacy.on or not neural.enabled() or self._neural_failures >= 2:
             return False
+        if providers.offline_mode():
+            return False
         pieces = neural.chunks(text)
         if not pieces:
             return True

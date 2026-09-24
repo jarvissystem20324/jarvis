@@ -71,6 +71,9 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_TTS", "offline")
     monkeypatch.setenv("JARVIS_AUTO_WEB", "off")
     monkeypatch.setenv("JARVIS_DICTATE_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_QUICKASK_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_SUGGEST", "off")
+    monkeypatch.setenv("JARVIS_OFFLINE", "off")
     from jarvis import notes, reminders
 
     monkeypatch.setattr(notes, "get_data_dir", lambda: data)

@@ -56,6 +56,10 @@ RESERVED_COMMANDS = frozenset({
     "media", "volume", "app", "locate", "pc", "remind", "reminders", "timer", "alarm",
     "timers", "weather", "note", "notes", "t", "makedoc", "docx", "pdf", "data", "img",
     "translate", "readaloud", "commit", "redact", "autoweb",
+    # 7.0
+    "calc", "convert", "clock", "instructions", "pin", "pins", "clip", "ocr", "briefing",
+    "tidy", "qr", "stopwatch", "review", "changes", "revert", "explain", "todo", "pr",
+    "look", "offline", "suggest", "edit", "password", "lock", "memory", "mini", "zoom",
 })
 
 

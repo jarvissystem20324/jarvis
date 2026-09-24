@@ -56,17 +56,31 @@ Documents and data
   /data <file.csv|xlsx>  then /data <question>   exact numbers and charts
   /read <url> [question]  a web page     /doc <file>  a document     /docs <folder>
   make this 800px wide as a JPG    image tools on the last image  /img
+  what's in this picture?          ask about the last image       /look
+
+Exact answers and tools
+  15% of 240 · 100 usd to try · 5 miles to km · days until christmas     /calc
+  what time is it in Tokyo · 3pm Istanbul in London                       /clock
+  good morning — weather, today's reminders, headlines    /briefing [at 8:00|off]
+  copy text from the screen — drag a box, read offline     /ocr [image|screen]
+  tidy up my downloads — plan first, /tidy go, /tidy undo                  /tidy
+  /clip explain|summarize|translate <lang>|fix|reply   works on your clipboard
+  generate a password (to the clipboard, never shown)   /password [length]
+  /qr <text>   /stopwatch start|stop|lap|reset   /memory — edit what I remember
 
 Coding
   /project <folder>  /agent <task>  /fix  /trace  /testgen <file>  /commit
+  /review  /pr  /explain <file|name>  /todo  /changes  /revert <file>
   /where <thing>  /index  /git  /test  /diff  /apply  /undo
 
 Conversation
-  /chat new|<name>  /chats  /recall <words>  /retry  /export  /clear
+  /chat new|<name>  /chats  /recall <words>  /retry  /edit (or ↑)  /export [html|pdf]
+  /instructions <standing rules for this chat>   /pin  /pins   /suggest on|off
   /mode low|mid|high|max|hyperdrive|security   /code   /image <prompt>  /vary
+  /mini  /zoom in|out   Ctrl+Alt+Space: quick ask from anywhere
 
 Privacy and security
-  /privacy  /redact  /autoweb  /security  /audit  /scan  /sandbox <file>
+  /privacy  /redact  /autoweb  /offline  /lock [set|off]  /security  /audit  /scan  /sandbox <file>
 
 Setup
   /health  /bench  /compare <question>  /stats  /lang  /setup  /keys"""
@@ -117,6 +131,8 @@ class Everyday:
         command, may_fall_through = routed
         name, _, args = command[1:].partition(" ")
         result = self.everyday_command(name, args, routed=may_fall_through)
+        if result is None:
+            result = self.extras_command(name, args, routed=may_fall_through)
         return result
 
     # --- media, apps, files, PC ------------------------------------------
@@ -532,6 +548,10 @@ class Everyday:
         if text.startswith("/") or len(text) > 400 or security.privacy.on:
             return False
         if self.brain.code_mode or not self.autoweb_enabled():
+            return False
+        from . import providers
+
+        if providers.offline_mode():
             return False
         if not _FRESH.search(text):
             return False

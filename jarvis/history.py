@@ -13,6 +13,7 @@ and safe to hand to someone else.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -140,7 +141,7 @@ def delete_chat(name: str) -> bool:
 
 
 def save(messages: list[dict], mode: str = "", code_mode: bool = False,
-         name: str | None = None, summary: str = "") -> None:
+         name: str | None = None, summary: str = "", instructions: str = "") -> None:
     """Write the conversation. Best effort — never interrupts the app."""
     try:
         payload = {
@@ -150,6 +151,8 @@ def save(messages: list[dict], mode: str = "", code_mode: bool = False,
             "code_mode": code_mode,
             # What trimmed-away turns said, so a restart does not lose it.
             "summary": summary,
+            # Standing instructions for this conversation only (/instructions).
+            "instructions": instructions,
             "messages": messages[-MAX_SAVED_MESSAGES:],
         }
         # Sealed with the Windows login when encryption is on (the default).
@@ -193,6 +196,20 @@ def load_summary(name: str | None = None) -> str:
     except (OSError, ValueError):
         return ""
     return str(data.get("summary") or "") if isinstance(data, dict) else ""
+
+
+def load_instructions(name: str | None = None) -> str:
+    """This conversation's standing instructions, or ''."""
+    try:
+        data = vault.read_json(_path(name))
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("instructions") or "") if isinstance(data, dict) else ""
+
+
+def needs_title(name: str) -> bool:
+    """Unnamed conversations get a title from their first exchange."""
+    return bool(re.fullmatch(r"chat-\d+", name or ""))
 
 
 def search_all(needle: str, limit: int = 30) -> list[tuple[str, str, str]]:

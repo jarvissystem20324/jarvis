@@ -245,6 +245,15 @@ class Board:
         self.save()
         return f"Cancelled {count}." if count else f"Nothing called '{which}' is pending."
 
+    def cancel_kind(self, kind: str) -> int:
+        with self._lock:
+            before = len(self.items)
+            self.items = [r for r in self.items if r.kind != kind]
+            removed = before - len(self.items)
+        if removed:
+            self.save()
+        return removed
+
     def describe(self, kinds: set[str] | None = None) -> str:
         shown = [r for r in self.items if kinds is None or r.kind in kinds]
         if not shown:

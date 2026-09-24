@@ -124,6 +124,43 @@ def route(text: str) -> tuple[str, bool] | None:
     if m:
         return f"/readaloud {m.group(1)}", True
 
+    # --- 7.0: exact answers ---
+    from . import calc
+
+    if calc.looks_like_math(t):
+        return f"/calc {t}", True
+    m = re.fullmatch(r"(?:what\s+time\s+is\s+it|what'?s\s+the\s+time|time|saat\s+kaç)\s+(?:now\s+)?in\s+(.+)", t, re.I)
+    if m:
+        return f"/clock {m.group(1)}", True
+    m = re.fullmatch(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+(?:in\s+)?([a-z][\w .]+?)\s+(?:in|to)\s+([a-z][\w .]+?)(?:\s+time)?", t, re.I)
+    if m and re.search(r":|am$|pm$", m.group(1).lower().replace(" ", "")):
+        return f"/clock {t}", True
+
+    # --- 7.0: images, files, the day ---
+    if re.fullmatch(r"(?:what'?s|what\s+is)\s+(?:in|on)\s+(?:this|the|that)\s+(?:image|picture|photo|pic|screenshot)"
+                    r"|describe\s+(?:this|the|that)\s+(?:image|picture|photo|pic|screenshot)"
+                    r"|what\s+(?:do\s+you\s+see|does\s+(?:this|the)\s+(?:image|picture|photo)\s+show)", low):
+        return "/look", True
+    m = re.fullmatch(r"(?:tidy|clean)\s+up\s+(?:my\s+)?downloads(?:\s+folder)?|(?:tidy|organi[sz]e|sort)\s+(?:my\s+)?downloads(?:\s+folder)?", low)
+    if m:
+        return "/tidy", False
+    if low in {"good morning", "morning briefing", "brief me", "daily briefing", "günaydın", "briefing"}:
+        return "/briefing", False
+    m = re.fullmatch(r"(?:make|create|generate)\s+(?:a\s+)?qr(?:\s+code)?\s+(?:for|of|with)\s+(.+)", t, re.I)
+    if m:
+        return f"/qr {m.group(1)}", False
+    m = re.fullmatch(r"(start|stop|pause|reset|lap)\s+(?:the\s+|a\s+)?stopwatch", low)
+    if m:
+        return f"/stopwatch {m.group(1)}", False
+    if re.fullmatch(r"(?:copy|grab|read|get)\s+(?:the\s+)?text\s+(?:from|on|off)\s+(?:the\s+|my\s+)?screen", low):
+        return "/ocr", False
+    if re.fullmatch(r"(?:generate|make|create|give\s+me)\s+(?:a\s+|me\s+a\s+)?(?:strong\s+|new\s+|random\s+)?password", low):
+        return "/password", False
+    if low in {"lock", "lock jarvis", "lock the app", "lock yourself"}:
+        return "/lock", False
+    if re.fullmatch(r"(?:go\s+)?offline(?:\s+mode)?(?:\s+on)?|work\s+offline", low):
+        return "/offline on", False
+
     # --- opening apps and folders (last: the loosest) ---
     m = re.fullmatch(r"(?:open|launch|start)\s+(?:up\s+)?(.+)", t, re.I)
     if m and len(m.group(1)) <= 60:

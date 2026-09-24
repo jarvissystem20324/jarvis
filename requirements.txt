@@ -16,6 +16,9 @@ python-docx>=1.2.0
 fpdf2>=2.8.0
 openpyxl>=3.1.0
 psutil>=7.0.0
+# 7.0: QR codes, and the time-zone database Windows' Python lacks.
+qrcode>=8.0
+tzdata>=2025.1
 
 # Optional: fully offline speech-to-text, no key and no network.
 # pip install faster-whisper

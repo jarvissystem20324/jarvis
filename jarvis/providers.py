@@ -41,6 +41,8 @@ class Provider:
     # Whether this provider's default model accepts images. Sending a picture
     # to one that can't produces an opaque API error, so we skip it instead.
     vision: bool = False
+    # A separate model for images, when the chat model cannot see.
+    vision_model: str | None = None
 
 
 # --- chat -----------------------------------------------------------------
@@ -113,6 +115,10 @@ NVIDIA = Provider(
     # seconds. This one replies in about two seconds and keeps its
     # chain-of-thought in a separate field instead of the reply.
     chat_model="nvidia/nemotron-3-super-120b-a12b",
+    # Images: the one NIM vision model that answered on the free tier on
+    # 2026-09-24 (1.8s). The 90B timed out; three others were 410 Gone.
+    # Without it, a busy Gemini left JARVIS unable to see at all.
+    vision_model="meta/llama-3.2-11b-vision-instruct",
     free=True,
     signup="https://build.nvidia.com",
     notes="Free tier, fast. Most other NIM models time out.",
@@ -165,9 +171,21 @@ BLUEMINDS = Provider(
     notes="Third-party relay. Runs the coding agent (GLM-5 Turbo) when enabled.",
 )
 
+OLLAMA = Provider(
+    name="ollama",
+    label="Ollama (offline)",
+    base_url="http://localhost:11434/v1",
+    key_env=None,
+    # Whatever model is installed; resolved at call time (see model_for).
+    chat_model="auto",
+    free=True,
+    signup="https://ollama.com/download",
+    notes="Runs on this PC. No internet, no key, nothing leaves the machine.",
+)
+
 # Every provider JARVIS knows how to talk to.
 CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS,
+    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS, OLLAMA,
 )
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
@@ -224,13 +242,50 @@ def chat_chain() -> list[Provider]:
     `JARVIS_PROVIDER` pins one explicitly; otherwise every configured provider
     is tried in preference order so a dead key falls through to a live one.
     """
+    # Offline mode: the local model and nothing else, so nothing leaves.
+    if offline_mode():
+        return [OLLAMA] if ollama_models() else []
     pinned = get_setting("JARVIS_PROVIDER", "auto").lower()
     ordered = list(AUTO_CHAT_PROVIDERS) + _extra_providers()
+    # A running Ollama is the last resort: slower than the free clouds, but
+    # it answers when the internet — or every key — does not.
+    if ollama_models():
+        ordered.append(OLLAMA)
     if pinned != "auto" and pinned in BY_NAME:
         chosen = BY_NAME[pinned]
         rest = [p for p in ordered if p is not chosen and has_key(p)]
         return [chosen, *rest]
     return [p for p in ordered if has_key(p)]
+
+
+def offline_mode() -> bool:
+    return get_setting("JARVIS_OFFLINE", "off").strip().lower() in {"1", "on", "true", "yes"}
+
+
+_ollama_cache: tuple[float, list[str]] = (0.0, [])
+
+
+def ollama_models(refresh: bool = False) -> list[str]:
+    """Models installed in a running Ollama, or [] if it is not running.
+
+    Asked at most every 30 seconds, with a short timeout, so a PC without
+    Ollama pays a quarter of a second once rather than on every message.
+    """
+    import time as _time
+
+    global _ollama_cache
+    checked, models = _ollama_cache
+    if not refresh and _time.monotonic() - checked < 30:
+        return models
+    base = get_setting("JARVIS_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/api/tags", timeout=0.25) as response:
+            data = json.loads(response.read())
+        models = [m.get("name", "") for m in data.get("models") or [] if m.get("name")]
+    except Exception:
+        models = []
+    _ollama_cache = (_time.monotonic(), models)
+    return models
 
 
 def _extra_providers() -> list[Provider]:
@@ -275,7 +330,13 @@ def stt_chain() -> list[Provider]:
 
 def model_for(provider: Provider) -> str:
     """Per-provider model override, e.g. JARVIS_GROQ_MODEL."""
-    return get_setting(f"JARVIS_{provider.name.upper()}_MODEL", provider.chat_model)
+    model = get_setting(f"JARVIS_{provider.name.upper()}_MODEL", provider.chat_model)
+    if provider.name == "ollama" and model == "auto":
+        installed = ollama_models()
+        # Prefer a general chat model over an embedding or code-only one.
+        chat = [m for m in installed if not any(w in m for w in ("embed", "coder", "vision"))]
+        return (chat or installed or ["llama3.2"])[0]
+    return model
 
 
 def stt_model_for(provider: Provider) -> str:

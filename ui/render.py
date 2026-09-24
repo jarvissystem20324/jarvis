@@ -77,15 +77,26 @@ def configure_tags(textbox, colors: dict, font_size: int = 14) -> None:
     textbox.tag_config("found", background=colors["accent"], foreground=colors["bg"])
 
 
-def insert(textbox, text: str, colors: dict) -> None:
-    """Write `text` into the widget with markdown and code highlighting."""
+def insert(textbox, text: str, colors: dict, on_code=None) -> None:
+    """Write `text` into the widget with markdown and code highlighting.
+
+    `on_code(textbox, code, language, label)` is called after each finished
+    code block, so the window can put Copy and Save buttons under it.
+    """
     in_code = False
     language = ""
+    label = ""
+    lines: list[str] = []
     for raw in text.split("\n"):
         fence = _FENCE.match(raw)
         if fence:
             if in_code:
-                in_code, language = False, ""
+                if on_code is not None:
+                    try:
+                        on_code(textbox, "\n".join(lines), language, label)
+                    except Exception:
+                        pass
+                in_code, language, lines = False, "", []
                 textbox.insert("end", "\n")
             else:
                 in_code = True
@@ -96,6 +107,7 @@ def insert(textbox, text: str, colors: dict) -> None:
             continue
 
         if in_code:
+            lines.append(raw)
             _code_line(textbox, raw + "\n", language)
             continue
 

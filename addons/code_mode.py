@@ -27,6 +27,17 @@ from pathlib import Path
 from jarvis import security
 from jarvis.addons import Addon, Command
 
+
+def _exe(name: str) -> str:
+    """The real path of a tool, e.g. npm -> ...\\npm.cmd on Windows.
+
+    npm, yarn, pnpm, mvn and gradle are .cmd scripts on Windows, and
+    starting "npm" without a shell fails with "not found" even when it is
+    installed — so /test and /fix never once ran a JavaScript project's
+    tests on Windows. Resolving the full path first fixes that.
+    """
+    return shutil.which(name) or name
+
 CODE_PERSONA = """You are JARVIS in code mode: a senior software engineer
 pair-programming with the user.
 
@@ -439,12 +450,28 @@ class CodeMode(Addon):
             except (json.JSONDecodeError, OSError):
                 scripts = {}
             if "test" in scripts:
-                return ["npm", "test", "--silent"], "npm test"
+                # The lockfile says which package manager the project uses.
+                if (root / "pnpm-lock.yaml").is_file():
+                    return [_exe("pnpm"), "test"], "pnpm test"
+                if (root / "yarn.lock").is_file():
+                    return [_exe("yarn"), "test"], "yarn test"
+                return [_exe("npm"), "test", "--silent"], "npm test"
 
         if (root / "Cargo.toml").is_file():
-            return ["cargo", "test"], "cargo test"
+            return [_exe("cargo"), "test"], "cargo test"
         if (root / "go.mod").is_file():
-            return ["go", "test", "./..."], "go test"
+            return [_exe("go"), "test", "./..."], "go test"
+        if any(root.glob("*.sln")) or any(root.glob("*.csproj")) or any(root.glob("*/*.csproj")):
+            return [_exe("dotnet"), "test"], "dotnet test"
+        if (root / "pom.xml").is_file():
+            return [_exe("mvn"), "-q", "test"], "Maven"
+        wrapper = root / ("gradlew.bat" if sys.platform == "win32" else "gradlew")
+        if wrapper.is_file():
+            return [str(wrapper), "test"], "Gradle"
+        if (root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file():
+            return [_exe("gradle"), "test"], "Gradle"
+        if (root / "deno.json").is_file() or (root / "deno.jsonc").is_file():
+            return [_exe("deno"), "test"], "deno test"
         return None
 
     @staticmethod
@@ -483,8 +510,9 @@ class CodeMode(Addon):
         if detected is None:
             return (
                 "I can't tell how this project runs its tests. I look for "
-                "pytest (a tests/ folder or test_*.py), an npm 'test' script, "
-                "Cargo.toml, or go.mod."
+                "pytest or unittest (a tests/ folder or test_*.py), an npm, "
+                "yarn or pnpm 'test' script, Cargo.toml, go.mod, a .NET "
+                "solution or project, pom.xml, Gradle, or deno.json."
             )
         command, label = detected
         if not security.permissions.ask(

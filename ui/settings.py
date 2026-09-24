@@ -248,12 +248,17 @@ class SettingsWindow(ctk.CTkToplevel):
             city.insert(0, self.original["JARVIS_CITY"])
         self.entries["JARVIS_CITY"] = city
 
-        row = self._labelled(parent, "Dictation shortcut")
-        dictate = ctk.CTkEntry(row, height=30, placeholder_text="ctrl+alt+d  (off to disable)")
-        dictate.pack(side="left", fill="x", expand=True)
-        if self.original.get("JARVIS_DICTATE_HOTKEY"):
-            dictate.insert(0, self.original["JARVIS_DICTATE_HOTKEY"])
-        self.entries["JARVIS_DICTATE_HOTKEY"] = dictate
+        for env_name, label, hint in (
+            ("JARVIS_DICTATE_HOTKEY", "Dictation shortcut", "ctrl+alt+d  (off to disable)"),
+            ("JARVIS_QUICKASK_HOTKEY", "Quick-ask shortcut", "ctrl+alt+space  (off to disable)"),
+            ("JARVIS_LOCK_IDLE", "Auto-lock after (min)", "10 — only with a PIN (/lock set)"),
+        ):
+            row = self._labelled(parent, label)
+            box = ctk.CTkEntry(row, height=30, placeholder_text=hint)
+            box.pack(side="left", fill="x", expand=True)
+            if self.original.get(env_name):
+                box.insert(0, self.original[env_name])
+            self.entries[env_name] = box
 
         self._heading(parent, "Privacy",
                       "Encryption ties saved chats, memory and notes to your Windows login. "
@@ -262,7 +267,8 @@ class SettingsWindow(ctk.CTkToplevel):
         switch = {"on": "On", "off": "Off"}
         for env_name, label in (("JARVIS_ENCRYPT", "Encrypt saved data"),
                                 ("JARVIS_REDACT", "Redact before sending"),
-                                ("JARVIS_AUTO_WEB", "Auto web search")):
+                                ("JARVIS_AUTO_WEB", "Auto web search"),
+                                ("JARVIS_SUGGEST", "Follow-up suggestions")):
             row = self._labelled(parent, label)
             menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
             current = self.original.get(env_name, "on").strip().lower()

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 # Invisible or direction-flipping characters. U+E0000–U+E007F are "tag"
 # characters: invisible, but models read them as ASCII.
 _INVISIBLE = re.compile(
-    "[​-‏‪-‮⁠-⁤⁦-⁩﻿\U000e0000-\U000e007f]"
+    "[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]"
 )
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
@@ -80,7 +80,7 @@ class Cleaned:
             kinds = sorted({k for k, _ in self.removed})
             example = self.removed[0][1]
             parts.append(
-                f"{len(self.removed)} line(s) in {self.source} were addressed to "
+                f"{len(self.removed)} passage(s) in {self.source} were addressed to "
                 f"the AI rather than to you ({', '.join(kinds)}), e.g. "
                 f"\"{example}\". I removed them and ignored them."
             )
@@ -107,12 +107,24 @@ def clean(text: str, source: str = "an outside source") -> Cleaned:
 
     kept: list[str] = []
     for line in text.splitlines():
-        hit = next((name for name, pattern in _ATTACKS if pattern.search(line)), None)
-        if hit:
-            removed.append((hit, " ".join(line.split())[:80]))
+        if not any(pattern.search(line) for _n, pattern in _ATTACKS):
+            kept.append(line)
+            continue
+        # Sentence by sentence, so the rest of a paragraph survives: a copied
+        # paragraph is one line, and dropping the whole line once threw away
+        # everything the user wanted summarised along with the one bad sentence.
+        sentences = re.split(r"(?<=[.!?])\s+", line)
+        survivors = []
+        for sentence in sentences:
+            hit = next((name for name, pattern in _ATTACKS if pattern.search(sentence)), None)
+            if hit:
+                removed.append((hit, " ".join(sentence.split())[:80]))
+            else:
+                survivors.append(sentence)
+        if not survivors:
             kept.append("[removed: text addressed to the AI]")
         else:
-            kept.append(line)
+            kept.append(" ".join(survivors) + " [removed: a sentence addressed to the AI]")
     return Cleaned("\n".join(kept), source, removed, invisible)
 
 

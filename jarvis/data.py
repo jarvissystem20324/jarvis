@@ -58,7 +58,7 @@ def _number(value):
         return None
     if isinstance(value, (int, float)):
         return None if isinstance(value, float) and math.isnan(value) else float(value)
-    text = str(value or "").strip().replace(" ", "")
+    text = str(value or "").strip().replace("\u00a0", "")
     if not text:
         return None
     text = re.sub(r"^[€$£₺]|[€$£₺%]$", "", text).strip()

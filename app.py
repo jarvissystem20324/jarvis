@@ -193,6 +193,36 @@ def selftest() -> int:
 
     check("encryption", _vault)
 
+    # 7.0
+    def _zones() -> str:
+        from jarvis import clock
+
+        return clock.answer("15:00 utc in tokyo")
+
+    check("time zones", _zones)
+    check("QR codes", lambda: f"qrcode, {__import__('qrcode').make('jarvis').size[0]}px")
+    check("calculator", lambda: __import__("jarvis.calc", fromlist=["solve"]).solve("15% of 240"))
+
+    def _ocr() -> str:
+        from jarvis import ocr
+
+        if not ocr.available():
+            return "not available on this platform"
+        from PIL import Image, ImageDraw, ImageFont
+
+        image = Image.new("RGB", (700, 100), "white")
+        try:
+            font = ImageFont.truetype("arial.ttf", 40)
+        except OSError:
+            font = ImageFont.load_default()
+        ImageDraw.Draw(image).text((20, 25), "JARVIS self test", fill="black", font=font)
+        text = ocr.read_image_from(image)
+        if "self test" not in text.lower():
+            raise RuntimeError(f"read {text!r}")
+        return "Windows OCR read a test image"
+
+    check("screen text (OCR)", _ocr)
+
     from jarvis import config as _cfg
     if getattr(_cfg, "last_env_changes", None):
         for change in _cfg.last_env_changes:

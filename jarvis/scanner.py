@@ -242,6 +242,10 @@ def _code_only(text: str) -> list[str] | None:
     return blanked
 
 
+_BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
+_HIDDEN = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+
+
 def scan_text(text: str, name: str = "", suffix: str = "") -> list[Finding]:
     """Every finding in one file's contents."""
     findings: list[Finding] = []
@@ -255,6 +259,22 @@ def scan_text(text: str, name: str = "", suffix: str = "") -> list[Finding]:
     for number, line in enumerate(lines, 1):
         if len(line) > 2000:          # minified bundle; rules would only misfire
             continue
+
+        # "Trojan Source": bidirectional overrides make code display in a
+        # different order from how it runs, and zero-width characters hide
+        # text entirely. Looked for in the raw line — they hide in strings
+        # and comments. JARVIS's own 6.0 shield carried nine of them by
+        # accident, which is how this rule came to exist.
+        hidden = _HIDDEN.findall(line)
+        if hidden:
+            findings.append(Finding(
+                "high" if _BIDI.search(line) else "warn",
+                "Hidden or direction-changing characters",
+                "Invisible or bidirectional-override characters can make code read "
+                "differently from how it runs (the 'Trojan Source' technique). Write "
+                "them as escapes like \\u202e, or remove them.",
+                name, number, ", ".join(f"U+{ord(c):04X}" for c in hidden[:6]),
+            ))
 
         for rule_name, pattern, owner in SECRET_RULES:
             match = pattern.search(line)

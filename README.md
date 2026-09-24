@@ -1,4 +1,4 @@
-# JARVIS 6.0
+# JARVIS 7.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -103,9 +103,20 @@ still goes to the AI):
 | note: buy milk | Quick notes, kept sealed | `/note`, `/notes` |
 | make this 800px wide as a JPG | Image tools on the last image | `/img` |
 | read that out loud | Reads an answer, a file or a page in the natural voice | `/readaloud` |
+| 15% of 240 · 100 usd to try · 5 miles to km | Worked out exactly — live ECB rates for currency | `/calc` |
+| what time is it in Tokyo · 3pm Istanbul in London | World clock and time-zone conversion | `/clock` |
+| good morning | Weather, today's reminders, notes, real headlines | `/briefing [at 8:00]` |
+| copy text from the screen | Drag a box; Windows reads it offline, onto your clipboard | `/ocr` |
+| tidy up my downloads | Sorts files into folders — plan first, one-step undo | `/tidy` |
+| what's in this picture? | Asks a vision model about the last image | `/look` |
+| generate a password | Straight to the clipboard; never shown, saved or sent | `/password` |
+| make a qr code for … · start the stopwatch | QR codes, a stopwatch | `/qr`, `/stopwatch` |
 
 Reminders, timers and alarms fire only while JARVIS is open; anything that
 came due while it was closed is shown as missed on the next start.
+
+**Quick ask:** **Ctrl+Alt+Space** anywhere opens a small box on top of
+whatever you are doing; the answer appears there and is kept in the chat.
 
 **Dictation:** hold **Ctrl+Alt+D** anywhere — Word, Discord, a browser —
 speak, let go, and the words are typed where your cursor is.
@@ -148,13 +159,25 @@ itself — so a sum is a sum, not an estimate.
 | `/keys` | List the keyboard shortcuts |
 | `/bench [prompt]` | Time every model and say which ones are alive |
 | `/compare <question>` | Ask Low, Mid, High and Max the same thing, side by side |
-| `/chats` | List conversations |
+| `/chats` | List conversations — or the list down the left of the chat (Ctrl+B) |
+| `/edit` (or ↑) | Change your last question and ask again |
+| `/instructions <rules>` | Standing instructions for this conversation only, e.g. "you are my Turkish tutor" |
+| `/pin`, `/pins` | Keep an answer; find it later from any conversation |
+| `/export html\|pdf` | Export the conversation as a page or a PDF |
+| `/clip <action>` | explain, summarize, translate, fix, reply… on whatever you copied |
+| `/mini`, `/zoom in\|out` | A small always-on-top window (Ctrl+Shift+M); text size (Ctrl+= / Ctrl+-) |
+| `/memory` | Edit what JARVIS remembers about you |
 | `/chat <name>` | Switch. Also `/chat new <name>`, `/chat delete <name>` |
 | `/agent <task>` | Plan a job, show it, and carry it out once approved |
 | `/fix` | Run the tests and repair what fails |
 | `/index`, `/where <thing>` | Index the project, then find anything in it |
 | `/git <command>` | Reads are free; add, commit, checkout and push ask |
 | `/commit [all]` | Writes the commit message from your staged diff, then commits once you approve it |
+| `/review` | Reviews your uncommitted changes for bugs before you commit |
+| `/pr [base]` | Writes the pull-request description for this branch |
+| `/explain <file[:line]\|name>` | Explains a file, a line, or a function found in the index |
+| `/todo` | Every TODO, FIXME and HACK in the project |
+| `/changes`, `/revert <file>` | What the agent changed, and put back one file at a time |
 | `/web <question\|url>` | Search the web, or read one page |
 | `/stats` | Which providers you use and how fast they are |
 | `/task ...` | Scheduled tasks, while JARVIS is open |
@@ -179,6 +202,18 @@ itself — so a sum is a sum, not an estimate.
 | `/security` | Current security settings |
 | `/redact [on\|off]` | What was masked in the last request |
 | `/autoweb [on\|off]` | Automatic web search for questions about recent things |
+| `/offline [on\|off]` | Answer with a model running on this PC (Ollama) and nothing else |
+| `/lock [set\|off]` | A PIN to open JARVIS, and an automatic lock when idle (Ctrl+Shift+L) |
+
+**Offline mode.** Install [Ollama](https://ollama.com/download) and run
+`ollama pull llama3.2`. From then on, if every cloud provider fails, the model
+on your PC answers; `/offline on` makes it the only one, so nothing leaves the
+machine and web search and online voices switch off.
+
+**App lock.** `/lock set` chooses a PIN. It is stored only as a salted,
+slow hash; wrong guesses are rate limited; while locked, the chat, shortcuts
+and push-to-talk are all blocked. It keeps someone at your desk out of your
+conversations — it is not disk encryption, which is what the vault is for.
 
 **Encryption at rest.** Conversations, remembered facts, notes, reminders
 and the document index are encrypted with your Windows login (DPAPI). A
