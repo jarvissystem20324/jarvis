@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -10,6 +10,8 @@ from . import (
     agent, history, i18n, index, modes, personality, providers, scanner,
     schedule, security, tools, usage, vcs, websearch,
 )
+from . import library
+from . import trace as trace_mod
 from .addons import AddonManager
 from .brain import Brain
 from .config import voice_enabled_by_default
@@ -22,6 +24,9 @@ class JarvisResponse:
     text: str
     image_path: Path | None = None
     should_quit: bool = False
+    # Several images at once, from /vary. image_path stays the first of them
+    # so everything written before this field existed keeps working.
+    image_paths: list[Path] = field(default_factory=list)
 
 
 class Jarvis:
@@ -72,10 +77,44 @@ class Jarvis:
         except ImageGenerationError as exc:
             return JarvisResponse(text=str(exc))
 
+        self._last_image = (prompt, size, quality)
         self._maybe_speak("Image generated, sir.")
         return JarvisResponse(
-            text=f"Image generated successfully.\nSaved to: {path}",
+            text=f"Image generated successfully.\nSaved to: {path}\n/vary makes more versions.",
             image_path=path,
+            image_paths=[path],
+        )
+
+    def vary(self, args: str) -> JarvisResponse:
+        """More versions of the last image: same prompt, different seeds."""
+        last = getattr(self, "_last_image", None)
+        if last is None:
+            return JarvisResponse(text="Generate an image first with /image <prompt>.")
+        prompt, size, quality = last
+        extra = args.strip()
+        count = 3
+        if extra[:1].isdigit():
+            count, _, extra = extra.partition(" ")
+            count = max(1, min(4, int(count)))
+        if extra:
+            # "/vary at sunset" nudges the prompt rather than repeating it.
+            prompt = f"{prompt}, {extra}"
+
+        paths: list[Path] = []
+        failures: list[str] = []
+        for _ in range(count):
+            try:
+                paths.append(self.images.generate(prompt, size=size, quality=quality))
+            except ImageGenerationError as exc:
+                failures.append(str(exc))
+        if not paths:
+            return JarvisResponse(text="No variations came back:\n" + "\n".join(failures[:2]))
+        self._last_image = (prompt, size, quality)
+        note = f"\n({len(failures)} failed.)" if failures else ""
+        return JarvisResponse(
+            text=f"{len(paths)} variation(s) of: {prompt}{note}",
+            image_path=paths[0],
+            image_paths=paths,
         )
 
     def process(
@@ -169,9 +208,17 @@ class Jarvis:
             if name == "fix":
                 return JarvisResponse(text=self.fix(args))
 
-            if name == "undo" and self._agent is not None and self._agent.written:
+            if name == "undo" and self._agent is not None and (
+                self._agent.written or self._agent.last_branch
+            ):
                 # The agent wrote last, so /undo means its changes.
                 return JarvisResponse(text=self.agent_undo())
+
+            if name == "trace":
+                return JarvisResponse(text=self.trace(args))
+
+            if name == "testgen":
+                return JarvisResponse(text=self.testgen(args))
 
             if name == "index":
                 return JarvisResponse(text=self.build_index(args))
@@ -201,6 +248,21 @@ class Jarvis:
 
             if name == "compare":
                 return JarvisResponse(text=self.compare(args))
+
+            if name == "recall":
+                return JarvisResponse(text=self.recall(args))
+
+            if name == "docs":
+                return JarvisResponse(text=self.docs(args))
+
+            if name == "vary":
+                return self.vary(args)
+
+            if name == "health":
+                return JarvisResponse(text=self.health_report())
+
+            if name == "release":
+                return JarvisResponse(text=self.release_check(args))
 
             if name in {"chat", "chats"}:
                 return JarvisResponse(text=self.chats(args if name == "chat" else ""))
@@ -350,6 +412,19 @@ class Jarvis:
             f"--- {symbol.file}:{symbol.line} ---\n{snippet}"
             for symbol, snippet in hits[:6]
         )
+        # These snippets go to a provider, so /where asks like /show does.
+        # It did not in 4.0, which was inconsistent with the choice to be
+        # asked every time code leaves the machine.
+        if not security.permissions.ask(
+            security.SEND_CODE,
+            "the code around these matches:\n"
+            + "\n".join(f"  {s.file}:{s.line}" for s, _ in hits[:6]),
+            context="/where",
+        ):
+            return (
+                f"{len(hits)} match(es) for '{query}':\n{listing}\n\n"
+                "(Not sent for an explanation — denied.)"
+            )
         verdict = self.brain.ask_once(
             "These are the places in a codebase that match the question. Say "
             "which one actually answers it and why, in a few sentences. Name "
@@ -524,6 +599,88 @@ class Jarvis:
             goal += f"\n\nFocus on: {hint}"
         return self.run_agent(goal)
 
+    def trace(self, args: str) -> str:
+        """Explain a pasted traceback against the real code, or fix it.
+
+        /trace <traceback>   explain it
+        /trace               in the window: reads the traceback off the clipboard
+        /trace fix           hand the last traceback to the agent to repair
+        """
+        text = args.strip()
+        if text.lower() == "fix":
+            last = getattr(self, "_last_trace", "")
+            if not last:
+                return "There's no traceback to fix yet. /trace <paste> first."
+            return self.run_agent(
+                "This error occurred. Find and fix its cause in the source, then "
+                "run the tests if the project has any. Change as little as "
+                "possible and never edit a test to make it pass.\n\n" + last[-6000:]
+            )
+        if not text:
+            return (
+                "Usage: /trace <traceback>\n"
+                "In the window, copy a traceback and type just /trace — it reads the clipboard.\n"
+                "Then /trace fix hands it to the agent."
+            )
+
+        addon = self._project_addon()
+        root = getattr(addon, "root", None) if addon else None
+        error, ours = trace_mod.analyse(text, root)
+
+        if ours and not security.permissions.ask(
+            security.SEND_CODE,
+            "the lines around each error location:\n"
+            + "\n".join(f"  {f.label()}" for f in ours),
+            context="/trace",
+        ):
+            return "Denied. Nothing was sent."
+        security.audit.record("trace", error[:120], f"{len(ours)} frame(s) in project")
+        self._last_trace = text
+
+        blocks = "\n\n".join(f"--- {f.label()} ---\n{f.code}" for f in ours if f.code)
+        explanation = self.brain.ask_once(
+            "Explain this error. Say which line is actually at fault — often not "
+            "the last frame — and why it fails, then give the smallest fix as "
+            "code. If the code shown is not enough to tell, say what else you "
+            "would need to see.\n\n"
+            f"Error: {error}\n\n--- traceback ---\n{text[-4000:]}\n\n{blocks}"
+        )
+
+        if ours:
+            where = "\n".join(f"  {f.label()}" for f in ours)
+            head = f"{error}\n\nIn your code:\n{where}"
+        elif root is None:
+            head = f"{error}\n\n(No project open, so I could not read the code. /project <folder> helps.)"
+        else:
+            head = f"{error}\n\nNone of the frames are in {root.name} — the fault is in a library, or in how it was called."
+        tail = "\n\n/trace fix hands this to the agent to repair." if root else ""
+        return f"{head}\n\n{explanation}{tail}"
+
+    def testgen(self, args: str) -> str:
+        """Have the agent write tests for a file that has none."""
+        target = args.strip().strip('"').strip("'")
+        if not target:
+            return "Usage: /testgen <file>\nExample: /testgen src/calc.py"
+        addon = self._project_addon()
+        root = getattr(addon, "root", None) if addon else None
+        if root is None:
+            return "No project open. Use /project <folder> first."
+        if not (root / target).is_file():
+            return f"{target} isn't a file in {root.name}."
+
+        style = "unittest"
+        detected = addon._detect_test_command()
+        if detected and detected[1] == "pytest":
+            style = "pytest"
+        stem = Path(target).stem
+        return self.run_agent(
+            f"Write {style} tests for {target} in tests/test_{stem}.py. Read the "
+            f"file first and test what it actually does, including edge cases "
+            f"and error paths. Then run the tests. The tests must pass against "
+            f"the code as it is now: do NOT modify {target}. If a test reveals "
+            f"what looks like a real bug, leave that test out and say so instead."
+        )
+
     def _project_addon(self):
         for entry in self.addons.loaded:
             if entry.addon.name == "code-mode":
@@ -603,6 +760,13 @@ class Jarvis:
             model = providers.model_for(provider)
             if (provider.name, model) not in seen:
                 targets.append(("—", provider, model))
+                seen.add((provider.name, model))
+        # Keyed but not in the chain: measured so you can see when one starts
+        # working, without having to promote it first.
+        for provider in providers.keyed_but_idle():
+            model = providers.model_for(provider)
+            if (provider.name, model) not in seen:
+                targets.append(("opt-in", provider, model))
                 seen.add((provider.name, model))
 
         if not targets:
@@ -687,6 +851,227 @@ class Jarvis:
         return "\n\n".join(blocks)
 
     # --- conversations ----------------------------------------------------
+
+    def recall(self, args: str) -> str:
+        """Search every saved conversation, not just the one on screen."""
+        needle = args.strip()
+        if not needle:
+            return "Usage: /recall <words>\nSearches every saved conversation, and their summaries."
+        # Make sure the one open right now is on disk, or it cannot be found.
+        self.save_history()
+        hits = history.search_all(needle)
+        if not hits:
+            return f"'{needle}' doesn't appear in any saved conversation."
+        chats = sorted({c for c, _w, _s in hits})
+        lines = [f"{len(hits)} match(es) in {len(chats)} conversation(s):"]
+        for chat, who, snippet in hits:
+            lines.append(f"  [{chat}] {who}: {snippet}")
+        lines.append("")
+        lines.append("/chat <name> opens one.")
+        return "\n".join(lines)
+
+    # --- health and release -----------------------------------------------
+
+    def health_report(self) -> str:
+        """Everything worth knowing about this install, on one screen.
+
+        Nothing here sends a request: providers are shown as the chain has
+        already found them. /bench is the one that measures.
+        """
+        import shutil
+
+        from . import __version__, config, updater
+
+        marks = {"ok": "answering", "ready": "ready", "cooling": "throttled, retrying soon",
+                 "dead": "OFF this session (key rejected or no credit)"}
+        lines = [f"JARVIS {__version__} — health", "", "Providers:"]
+        states = self.brain.health()
+        if not states:
+            lines.append("  none configured — add a free key in Settings")
+        for label, state in states:
+            symbol = {"ok": "+", "ready": " ", "cooling": "~", "dead": "!"}[state]
+            lines.append(f"  {symbol} {label:<20} {marks[state]}")
+        idle = providers.keyed_but_idle()
+        for provider in idle:
+            lines.append(f"    {provider.label:<20} opt-in, not in the chain")
+        lines.append(f"  mode: {self.brain.mode.label} -> "
+                     + ", ".join(f"{p}:{m}" for p, m in modes.targets_for(self.brain.mode)))
+
+        lines += ["", "This install:"]
+        base = config.get_base_dir()
+        try:
+            free = shutil.disk_usage(base).free / 1_073_741_824
+            lines.append(f"  {'!' if free < 2 else ' '} disk free        {free:.1f} GB")
+        except OSError:
+            pass
+        findings = security.env_file_findings()
+        if findings:
+            for level, title, _detail in findings:
+                lines.append(f"  {'!' if level == 'high' else '~'} {title}")
+        else:
+            lines.append("    .env             no problems found")
+        lines.append(f"    addons           {len(self.addons.loaded)} loaded"
+                     + (f", {len(self.addons.errors)} with errors" if self.addons.errors else ""))
+        url = updater.get_update_url()
+        lines.append("    updates          " + (
+            "configured (HTTPS)" if url.lower().startswith("https://")
+            else "NOT configured" if not url else "! not HTTPS"))
+        lines.append(f"    privacy mode     {'ON' if security.privacy.on else 'off'}")
+        lines.append(f"    audit entries    {len(security.audit.read(100000))}")
+        lines.append(f"    conversation     {len(self.brain.history) // 2} exchanges"
+                     + (" + summary" if self.brain.summary else ""))
+        lines += ["", "+ ok   ~ worth a look   ! needs attention    /bench measures speed"]
+        return "\n".join(lines)
+
+    def release_check(self, args: str) -> str:
+        """The pre-release checklist, run for real. For working on JARVIS itself.
+
+        Every item here is something this project has shipped wrong at least
+        once: a manifest carrying the previous release's notes, a version
+        string that did not match the build, a .env backup staged for commit,
+        a test that only passed because pytest was not installed.
+        """
+        import subprocess
+        import sys as _sys
+
+        from . import __version__, config
+
+        if getattr(_sys, "frozen", False):
+            return "/release checks a source checkout of JARVIS, not an installed copy."
+        root = config.get_app_dir()
+        results: list[tuple[bool, str]] = []
+
+        version_file = root / "assets" / "version.txt"
+        shipped = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
+        results.append((shipped == __version__,
+                        f"version: jarvis {__version__}, assets/version.txt {shipped or 'missing'}"))
+
+        notes = root / "release" / "NOTES.md"
+        heading = notes.read_text(encoding="utf-8").splitlines()[0].strip() if notes.exists() else ""
+        results.append((__version__ in heading,
+                        f"release notes heading: {heading or 'release/NOTES.md missing'}"))
+
+        status = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                                capture_output=True, text=True)
+        dirty = [l for l in status.stdout.splitlines() if l.strip()]
+        risky = [l for l in dirty if ".env" in l and ".env.example" not in l]
+        results.append((not risky, "no .env files staged or untracked-and-visible"
+                        if not risky else f"ENV FILES IN GIT STATUS: {risky}"))
+        results.append((not dirty, "working tree clean" if not dirty
+                        else f"{len(dirty)} uncommitted change(s)"))
+
+        high = []
+        for folder in ("jarvis", "addons", "ui"):
+            found, _ = scanner.scan_project(root / folder)
+            high += [f for f in found if f.level == "high"]
+        results.append((not high, "security scan: no high-severity findings" if not high
+                        else f"security scan: {len(high)} high — run /scan {root}"))
+
+        command = [_sys.executable, "-m", "pytest", "-q", "-o", "addopts="]
+        if not security.permissions.ask(security.RUN_TESTS, " ".join(command), context="/release"):
+            results.append((False, "tests: not run (denied)"))
+        else:
+            try:
+                proc = subprocess.run(command, cwd=str(root), capture_output=True,
+                                      text=True, timeout=600)
+                tail = (proc.stdout.strip().splitlines() or ["no output"])[-1]
+                if "No module named pytest" in (proc.stderr or ""):
+                    results.append((False, "tests: pytest is not installed "
+                                           "(pip install -r requirements-dev.txt)"))
+                else:
+                    results.append((proc.returncode == 0, f"tests: {tail}"))
+            except subprocess.TimeoutExpired:
+                results.append((False, "tests: still running after 10 minutes"))
+
+        ready = all(ok for ok, _ in results)
+        body = "\n".join(f"  {'+' if ok else '!'} {text}" for ok, text in results)
+        verdict = (f"Ready to build and release {__version__}." if ready
+                   else "Not ready — fix the lines marked ! first.")
+        security.audit.record("release check", __version__, "ready" if ready else "not ready")
+        return f"Release checklist — {__version__}\n\n{body}\n\n{verdict}"
+
+    # --- documents library ------------------------------------------------
+
+    def _library_marker(self) -> Path:
+        from .config import get_data_dir
+
+        folder = get_data_dir() / "library"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / "current.txt"
+
+    def docs(self, args: str) -> str:
+        """/docs <folder> to index it, /docs <question> to ask across it."""
+        text = args.strip().strip('"').strip("'")
+        marker = self._library_marker()
+        try:
+            current = Path(marker.read_text(encoding="utf-8").strip())
+        except OSError:
+            current = None
+
+        if not text:
+            if current is None:
+                return (
+                    "Usage: /docs <folder>     index a folder of PDFs, Word files and notes\n"
+                    "       /docs <question>   ask across everything in it\n"
+                    "Nothing is uploaded to build the index."
+                )
+            data = library.load(current) or {}
+            return (
+                f"Library: {current}\n{data.get('files', 0)} documents, "
+                f"{len(data.get('passages') or [])} passages.\n/docs <question> to ask."
+            )
+
+        candidate = Path(text).expanduser()
+        if candidate.is_dir():
+            data = library.build(candidate)
+            try:
+                marker.write_text(str(candidate.resolve()), encoding="utf-8")
+            except OSError:
+                pass
+            security.audit.record("docs index", str(candidate), f"{data['files']} files")
+            skipped = data.get("skipped") or []
+            note = ("\nSkipped:\n" + "\n".join(f"  {s}" for s in skipped[:8])) if skipped else ""
+            return (
+                f"Indexed {candidate}: {data['files']} documents, "
+                f"{len(data['passages'])} passages. Nothing was uploaded.{note}\n\n"
+                "Ask with /docs <question>."
+            )
+
+        if current is None:
+            return "No library yet. Start with /docs <folder>."
+        data = library.load(current)
+        if not data:
+            return f"The index for {current} is missing. Run /docs {current} again."
+
+        passages = library.search(data, text)
+        if not passages:
+            return f"Nothing in {current.name} matches that. Try other words."
+
+        sources = sorted({library.cite(p) for p in passages})
+        if not security.permissions.ask(
+            security.READ_FILE,
+            "passages from:\n" + "\n".join(f"  {s}" for s in sources),
+            context="/docs",
+        ):
+            return "Denied. Nothing was sent.\n\nThe matches were in:\n" + "\n".join(
+                f"  {s}" for s in sources
+            )
+        security.audit.record("docs ask", text[:120], f"{len(passages)} passages")
+
+        numbered = "\n\n".join(
+            f"[{i}] ({library.cite(p)})\n{p.text}" for i, p in enumerate(passages, 1)
+        )
+        answer = self.brain.ask_once(
+            "Answer the question using only these passages from the user's "
+            "documents. Cite each claim with its number, like [2]. If the "
+            "passages do not contain the answer, say so plainly instead of "
+            "filling the gap from general knowledge.\n\n"
+            f"Question: {text}\n\n{numbered}"
+        )
+        legend = "\n".join(f"  [{i}] {library.cite(p)}" for i, p in enumerate(passages, 1))
+        return f"{answer}\n\nSources:\n{legend}"
+
+    # --- conversations (manage) ---------------------------------------------
 
     def chats(self, args: str) -> str:
         """List, switch, create or delete named conversations."""
@@ -1034,6 +1419,7 @@ class Jarvis:
             self.brain.history,
             mode=self.brain.mode.name,
             code_mode=self.brain.code_mode,
+            summary=self.brain.summary,
         )
 
     def restore_history(self) -> str:
@@ -1043,6 +1429,7 @@ class Jarvis:
             self.brain.clear_history()
             return ""
         self.brain.history = messages
+        self.brain.summary = history.load_summary()
         if mode:
             self.brain.set_mode(mode)
         if code_mode:

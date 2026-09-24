@@ -27,7 +27,10 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("GROQ_API_KEY", "Groq", "console.groq.com/keys", True),
     ("INCEPTION_API_KEY", "Inception Mercury", "platform.inceptionlabs.ai", True),
     ("NVIDIA_API_KEY", "NVIDIA NIM", "build.nvidia.com", True),
+    ("OPENROUTER_API_KEY", "OpenRouter", "openrouter.ai/keys", True),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "platform.openai.com/api-keys", False),
+    ("BLUEMINDS_API_KEY", "Blueminds  (relay, opt-in)",
+     "api.bluesminds.com/console/token", False),
 )
 
 _SETTING = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")

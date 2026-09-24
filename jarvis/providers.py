@@ -129,9 +129,41 @@ POLLINATIONS = Provider(
     notes="Images only — its free text tier now refuses real prompts.",
 )
 
+OPENROUTER = Provider(
+    name="openrouter",
+    label="OpenRouter",
+    base_url="https://openrouter.ai/api/v1",
+    key_env="OPENROUTER_API_KEY",
+    # Not a model: a router that picks whichever free model is available
+    # right now. Every other provider here names a specific model, and this
+    # project has lost three of those to retirement — this one cannot be
+    # retired out from under it. Free tier: 200 requests a day, no card.
+    chat_model="openrouter/free",
+    free=True,
+    signup="https://openrouter.ai/keys",
+    notes="Free, 200/day, no card. Routes to whichever free model is up.",
+)
+
+BLUEMINDS = Provider(
+    name="blueminds",
+    label="Blueminds",
+    base_url="https://api.bluesminds.com/v1",
+    key_env="BLUEMINDS_API_KEY",
+    # A third-party relay rather than a model vendor: it resells access to
+    # other companies' models, so every prompt passes through its servers as
+    # well as the upstream's. Measured on 2026-09-24: the key was accepted,
+    # but gpt-5.5, kimi-k2.5, gemma-4-26b and gpt-oss-20b all timed out at the
+    # relay's own gateway (504), and two listed models answered 410 "reached
+    # its end of life on 2026-08-26" — its catalogue is a month stale.
+    chat_model="gpt-5.5",
+    free=False,
+    signup="https://api.bluesminds.com/console/token",
+    notes="Third-party relay. Opt-in only: add it to JARVIS_EXTRA_PROVIDERS.",
+)
+
 # Every provider JARVIS knows how to talk to.
 CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, OPENAI, POLLINATIONS,
+    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS,
 )
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
@@ -139,7 +171,16 @@ CHAT_PROVIDERS: tuple[Provider, ...] = (
 # leaving it in the chain would burn a request and confuse the error every
 # time. It still works for images, and `JARVIS_PROVIDER=pollinations` will
 # still pin it for anyone who wants it.
-AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (GEMINI, GROQ, INCEPTION, NVIDIA, OPENAI)
+# OpenRouter before OpenAI: free before paid, always.
+AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
+    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI,
+)
+
+# Known, keyed, but never tried unless asked for. A provider that takes 90
+# seconds to fail would add those 90 seconds to every failover, so an
+# unreliable one has to be promoted deliberately:
+#     JARVIS_EXTRA_PROVIDERS=blueminds
+OPT_IN_PROVIDERS: tuple[Provider, ...] = (BLUEMINDS,)
 
 STT_PROVIDERS: tuple[Provider, ...] = (GROQ, OPENAI)
 
@@ -180,11 +221,38 @@ def chat_chain() -> list[Provider]:
     is tried in preference order so a dead key falls through to a live one.
     """
     pinned = get_setting("JARVIS_PROVIDER", "auto").lower()
+    ordered = list(AUTO_CHAT_PROVIDERS) + _extra_providers()
     if pinned != "auto" and pinned in BY_NAME:
         chosen = BY_NAME[pinned]
-        rest = [p for p in AUTO_CHAT_PROVIDERS if p is not chosen and has_key(p)]
+        rest = [p for p in ordered if p is not chosen and has_key(p)]
         return [chosen, *rest]
-    return [p for p in AUTO_CHAT_PROVIDERS if has_key(p)]
+    return [p for p in ordered if has_key(p)]
+
+
+def _extra_providers() -> list[Provider]:
+    """Opt-in providers the user has promoted into the automatic chain.
+
+    They go last: an extra provider is a backstop, and putting an
+    unproven one ahead of the free tiers would make it the default.
+    """
+    from .config import get_setting
+
+    wanted = {
+        name.strip().lower()
+        for name in get_setting("JARVIS_EXTRA_PROVIDERS", "").split(",")
+        if name.strip()
+    }
+    return [p for p in OPT_IN_PROVIDERS if p.name in wanted]
+
+
+def keyed_but_idle() -> list[Provider]:
+    """Opt-in providers that have a key but are not in the chain.
+
+    /bench measures these too, so you can see when one starts working
+    without having to promote it first.
+    """
+    active = set(id(p) for p in chat_chain())
+    return [p for p in OPT_IN_PROVIDERS if has_key(p) and id(p) not in active]
 
 
 def stt_chain() -> list[Provider]:

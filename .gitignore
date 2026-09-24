@@ -21,3 +21,7 @@ jarvis-selftest.txt
 # remember, so it stays on the machine that created it.
 data/
 addons/.seeded
+
+# Test-run artifacts.
+.coverage
+htmlcov/

@@ -63,7 +63,12 @@ MINIMUM_KEYS = 2
 PROVIDER_FIELDS = (
     ("GEMINI_API_KEY", "Google Gemini  (free)", "AIza... or AQ..."),
     ("GROQ_API_KEY", "Groq  (free)", "gsk_..."),
+    # Mid — the default mode — has run on Mercury since 2.9, and until 5.0
+    # the installer never asked for its key, so a fresh install's everyday
+    # tier always fell straight through to the chain.
+    ("INCEPTION_API_KEY", "Inception  (free)", "sk_..."),
     ("NVIDIA_API_KEY", "NVIDIA NIM  (free)", "nvapi-..."),
+    ("OPENROUTER_API_KEY", "OpenRouter  (free)", "sk-or-..."),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "sk-..."),
 )
 
@@ -71,6 +76,7 @@ PROVIDER_FIELDS = (
 KEY_PREFIXES = {
     "GROQ_API_KEY": "gsk_",
     "NVIDIA_API_KEY": "nvapi-",
+    "OPENROUTER_API_KEY": "sk-or-",
     "OPENAI_API_KEY": "sk-",
 }
 REG_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"

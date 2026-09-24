@@ -46,6 +46,10 @@ class Mode:
     # applying 200s to every provider behind it turned one slow model into a
     # multi-minute wait for an answer the chain could have given in seconds.
     fallback_timeout: float = 90.0
+    # When set, the ordinary fallback chain is limited to these providers.
+    # Hyperdrive uses it to stay on NVIDIA: falling through to Gemini or Groq
+    # would quietly turn it into a different mode with the same name.
+    only_providers: tuple[str, ...] = ()
     accent: str = "#00d4ff"
 
 
@@ -129,7 +133,7 @@ MAX = Mode(
 HYPERDRIVE = Mode(
     name="hyperdrive",
     label="Hyperdrive",
-    blurb="Tries the heaviest models going, and gives up on them quickly.",
+    blurb="NVIDIA only: kimi-k3 first, then the 120B. Never falls back elsewhere.",
     style=MAX.style,
     max_tokens=6144,
     temperature=0.8,
@@ -149,6 +153,7 @@ HYPERDRIVE = Mode(
     first_target_timeout=30.0,
     timeout=180.0,
     fallback_timeout=60.0,
+    only_providers=("nvidia",),
     accent="#a855f7",
 )
 

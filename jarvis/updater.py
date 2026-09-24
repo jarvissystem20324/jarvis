@@ -145,6 +145,26 @@ def _require_https(url: str, what: str) -> None:
     )
 
 
+def _uncached(url: str) -> str:
+    """Add a unique query parameter so no cache can answer this.
+
+    GitHub serves `/releases/latest/download/` through a CDN, and a manifest
+    that has just been replaced keeps being served from cache for a while.
+    Stale *notes* would only be untidy; a stale **version number** tells
+    everyone they are already up to date and silently withholds the update —
+    which is precisely the "it says latest version and doesn't update" report
+    this project has already had once.
+
+    Only the manifest is fetched this way. The download itself is checked
+    against the SHA-256 in the manifest, so a cached copy of the binary is
+    either correct or rejected.
+    """
+    import time
+
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}_={int(time.time())}"
+
+
 def check_for_update(url: str | None = None) -> UpdateInfo | None:
     """Return an UpdateInfo if the manifest advertises a newer version."""
     manifest_url = (url or get_update_url()).strip()
@@ -157,7 +177,13 @@ def check_for_update(url: str | None = None) -> UpdateInfo | None:
 
     try:
         with net.urlopen(
-            net.request(manifest_url, {"User-Agent": USER_AGENT}),
+            net.request(_uncached(manifest_url), {
+                "User-Agent": USER_AGENT,
+                # Belt and braces: the query string defeats the CDN, these
+                # defeat any proxy in between.
+                "Cache-Control": "no-cache, max-age=0",
+                "Pragma": "no-cache",
+            }),
             timeout=CONNECT_TIMEOUT,
         ) as response:
             raw = response.read(256 * 1024)

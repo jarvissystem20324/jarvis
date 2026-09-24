@@ -7,6 +7,7 @@ import subprocess
 import sys
 import re
 import threading
+import time
 import tkinter
 import traceback
 from pathlib import Path
@@ -20,7 +21,7 @@ from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
 from jarvis import i18n, schedule, updater
-from ui import render, theme
+from ui import notify, render, theme
 
 ctk.set_default_color_theme("blue")
 
@@ -31,6 +32,9 @@ COLORS = dict(PALETTE)
 ctk.set_appearance_mode(PALETTE["appearance"])
 
 PREVIEW_MAX = 420
+# An answer that took longer than this, while you were in another window,
+# earns a notification. Anything quicker you were almost certainly watching.
+NOTIFY_AFTER_SECONDS = 8.0
 
 
 def safe_after(widget, callback) -> None:
@@ -89,6 +93,12 @@ class JarvisApp(ctk.CTk):
         # Anything sensitive asks before it happens, and the question has to
         # reach the Tk thread from whichever worker raised it.
         security.permissions.set_asker(self._ask_permission)
+        # The chain reports what it is doing; show it instead of "Thinking...".
+        self.jarvis.brain.status_callback = (
+            lambda text: safe_after(self, lambda t=text: self._show_progress(t))
+        )
+        self._inline_images: list = []
+        self._request_started = time.monotonic()
 
         self._build_layout()
         self.refresh_mode()
@@ -100,6 +110,7 @@ class JarvisApp(ctk.CTk):
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
         self._report_env_migration()
         self._restore_history()
+        self._first_run()
         self.chat_input.focus_set()
 
         self._enable_drag_and_drop()
@@ -631,6 +642,52 @@ class JarvisApp(ctk.CTk):
 
         self._settings_window = SettingsWindow(self, COLORS)
 
+    def _setup_text(self) -> str:
+        from jarvis import providers
+
+        keyed = [p.label for p in providers.chat_chain()]
+        if keyed:
+            have = f"You have {len(keyed)} key(s): {', '.join(keyed)}."
+            advice = ("That's enough to work. A second or third free key keeps "
+                      "JARVIS answering when one is rate limited."
+                      if len(keyed) >= 2 else
+                      "Add one more free key — with a single provider, one rate "
+                      "limit stops everything.")
+        else:
+            have = "No keys yet, so chat won't answer — but images already work."
+            advice = "Two free keys, about two minutes each, no card:"
+        return (
+            "Welcome to JARVIS.\n\n"
+            f"{have} {advice}\n\n"
+            "Fastest to get:\n"
+            "  • Groq — console.groq.com/keys (sign in with Google)\n"
+            "  • Gemini — aistudio.google.com/apikey (also lets JARVIS see images)\n"
+            "Paste them into Settings (Ctrl+,). Each has a Test button.\n\n"
+            "Worth knowing:\n"
+            "  • The mode button picks how hard it thinks — Low is fastest\n"
+            "  • /help lists every command, /keys the shortcuts\n"
+            "  • Anything that touches your files asks first\n\n"
+            "/setup shows this again."
+        )
+
+    def _first_run(self) -> None:
+        """One message on first launch. Not a wizard — a wizard is a thing
+        people click through without reading."""
+        from jarvis import providers
+        from jarvis.config import get_data_dir
+
+        marker = get_data_dir() / ".welcomed"
+        if marker.exists():
+            return
+        self._append_message("JARVIS", self._setup_text(), is_user=False, record=False)
+        try:
+            marker.write_text(__version__, encoding="utf-8")
+        except OSError:
+            pass
+        if not providers.chat_chain():
+            # With no keys at all, the next thing they need is the key form.
+            self.after(900, self._open_settings)
+
     def _restore_history(self) -> None:
         """Bring back the last conversation, and put it back on screen.
 
@@ -914,6 +971,8 @@ class JarvisApp(ctk.CTk):
             return self._find_in_chat(args)
         if name == "copy":
             return self._copy_last(args)
+        if name == "setup":
+            return self._setup_text()
         if name in {"keys", "shortcuts"}:
             return "Keyboard shortcuts:\n" + "\n".join(
                 f"  {key:<16} {what}" for key, what in self.SHORTCUTS
@@ -1001,9 +1060,52 @@ class JarvisApp(ctk.CTk):
         if not configured:
             return "No AI provider — add a free key (see README)"
         active = self.jarvis.brain.active_label()
-        if active != "not connected":
-            return f"Brain: {active}"
-        return "Brain: " + ", ".join(configured)
+        head = f"Brain: {active}" if active != "not connected" else "Brain: ready"
+
+        # One glance at every provider. A key that stopped working, or a
+        # provider being throttled, used to be invisible until an answer
+        # came back slower or from somewhere unexpected.
+        symbol = {"ok": "●", "ready": "○", "cooling": "◐", "dead": "✕"}
+        health = "  ".join(
+            f"{symbol[state]} {label.split()[0]}"
+            for label, state in self.jarvis.brain.health()
+        )
+        return f"{head}\n{health}"
+
+    def _show_progress(self, text: str) -> None:
+        """What the chain is doing right now, while a request is running."""
+        if self._busy:
+            try:
+                self.status_label.configure(text=text)
+            except Exception:
+                pass
+
+    def _insert_images(self, paths) -> None:
+        """Put generated images into the conversation itself.
+
+        They used to appear only in the Image tab, so a chat that produced
+        images read as a list of file paths.
+        """
+        try:
+            from PIL import ImageTk
+        except ImportError:
+            return
+        textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        self.chat_log.configure(state="normal")
+        for path in paths:
+            try:
+                with Image.open(path) as raw:
+                    thumb = raw.copy()
+                thumb.thumbnail((320, 320))
+                photo = ImageTk.PhotoImage(thumb)
+            except Exception:
+                continue
+            # Tk forgets an image nothing references, leaving a blank gap.
+            self._inline_images.append(photo)
+            textbox.image_create("end", image=photo, padx=4, pady=4)
+        textbox.insert("end", "\n\n")
+        self.chat_log.configure(state="disabled")
+        self.chat_log.see("end")
 
     def _refresh_provider(self) -> None:
         try:
@@ -1038,6 +1140,7 @@ class JarvisApp(ctk.CTk):
     def _run_worker(self, work, status: str) -> None:
         """Run `work()` off-thread, marshalling results back to the Tk loop."""
         self._request_id += 1
+        self._request_started = time.monotonic()
         self._set_busy(True, status)
         try:
             self.stop_btn.grid()
@@ -1141,6 +1244,17 @@ class JarvisApp(ctk.CTk):
 
         # /find, /copy and /keys act on this window, so they are answered
         # here rather than sent to a provider.
+        # A traceback is many lines and the message box holds one, so a bare
+        # /trace reads it off the clipboard. Done here, on the Tk thread,
+        # because the clipboard is not safe to touch from a worker.
+        if text.strip().lower() == "/trace":
+            try:
+                pasted = self.clipboard_get()
+            except tkinter.TclError:
+                pasted = ""
+            if pasted.strip():
+                text = "/trace " + pasted
+
         local = self._ui_command(text)
         if local is not None:
             self._append_message("JARVIS", local, is_user=False, record=False)
@@ -1185,10 +1299,19 @@ class JarvisApp(ctk.CTk):
             pass
         self.refresh_code_mode()
         self._end_stream(response.text)
-        if response.image_path:
-            self.current_image = response.image_path
-            self._show_image_preview(response.image_path)
-            self._show_tab("image")
+        paths = response.image_paths or ([response.image_path] if response.image_path else [])
+        if paths:
+            # Shown in the conversation, and kept current in the Image tab,
+            # without yanking you out of the chat you were in.
+            self._insert_images(paths)
+            self.current_image = paths[0]
+            self._show_image_preview(paths[0])
+            self._load_gallery()
+
+        elapsed = time.monotonic() - getattr(self, "_request_started", time.monotonic())
+        if elapsed > NOTIFY_AFTER_SECONDS and self.focus_displayof() is None:
+            notify.answer_ready(self, self.jarvis.brain.mode.label, elapsed)
+
         if response.should_quit:
             self._on_close()
 
@@ -1404,7 +1527,30 @@ class JarvisApp(ctk.CTk):
             return
 
         self.version_label.configure(text=f"v{__version__} → v{info.version}")
-        UpdateDialog(self, info)
+
+        if not silent:
+            UpdateDialog(self, info)
+            return
+
+        # Found by the quiet start-up check: fetch it while you keep working,
+        # verify the checksum, and only then interrupt — with a restart that
+        # takes seconds instead of a 44 MB progress bar.
+        self.status_label.configure(text=f"Downloading v{info.version} in the background…")
+
+        def fetch():
+            try:
+                path = updater.download_update(info)
+            except Exception as exc:
+                # Fall back to the ordinary dialog, which downloads on click.
+                safe_after(self, lambda: UpdateDialog(self, info))
+                return
+            safe_after(self, lambda: self._update_ready(info, path))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _update_ready(self, info, path: Path) -> None:
+        self.status_label.configure(text=f"v{info.version} is ready to install.")
+        UpdateDialog(self, info, downloaded=path)
 
     def _on_close(self) -> None:
         try:
@@ -1508,10 +1654,12 @@ class PermissionDialog(ctk.CTkToplevel):
 class UpdateDialog(ctk.CTkToplevel):
     """Shows the release notes, then downloads and installs on confirmation."""
 
-    def __init__(self, parent: JarvisApp, info):
+    def __init__(self, parent: JarvisApp, info, downloaded: Path | None = None):
         super().__init__(parent)
         self.info = info
-        self.downloaded: Path | None = None
+        # Set when the update was already fetched and verified in the
+        # background, in which case "Update now" is just a restart.
+        self.downloaded: Path | None = downloaded
 
         self.title("Update available")
         self.geometry("460x340")
@@ -1560,15 +1708,34 @@ class UpdateDialog(ctk.CTkToplevel):
         )
         self.later_btn.pack(side="right", padx=(8, 0))
         self.install_btn = ctk.CTkButton(
-            row, text="Update now", width=130,
+            row, text="Restart to update" if downloaded else "Update now", width=150,
             fg_color=COLORS["accent_dim"], hover_color=COLORS["accent"],
             command=self._install,
         )
         self.install_btn.pack(side="right")
+        if downloaded:
+            self.status.configure(text="Already downloaded and verified.")
 
     def _install(self) -> None:
         self.install_btn.configure(state="disabled")
         self.later_btn.configure(state="disabled")
+
+        if self.downloaded is not None and self.downloaded.exists():
+            # Fetched and checksum-verified in the background already.
+            self.status.configure(text="Restarting...")
+            path = self.downloaded
+
+            def apply():
+                try:
+                    updater.apply_update(path)
+                except Exception as exc:
+                    traceback.print_exc()
+                    message = f"Update failed: {type(exc).__name__}: {exc}"
+                    safe_after(self, lambda: self._failed(message))
+
+            threading.Thread(target=apply, daemon=True).start()
+            return
+
         self.progress.pack(fill="x", padx=20, pady=(0, 4), before=self.status)
         self.status.configure(text="Downloading...")
 

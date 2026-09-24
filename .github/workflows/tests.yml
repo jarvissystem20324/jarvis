@@ -1,0 +1,42 @@
+name: Tests
+
+# Every push and every pull request. A release tag also triggers the macOS
+# build, and a broken commit should be caught here first rather than
+# discovered by whoever downloads it.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is what ships. Linux catches anything that only works
+        # because of a Windows-specific path or behaviour.
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # sounddevice needs the PortAudio library to import at all on Linux.
+      - name: System libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt
+
+      # No API keys exist here, and none are needed: the suite never calls a
+      # provider. It tests what JARVIS does with an answer, not the answer.
+      - name: Test
+        run: python -m pytest --cov=jarvis --cov=addons --cov-report=term-missing:skip-covered

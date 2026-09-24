@@ -1,9 +1,18 @@
 """Image generation for JARVIS.
 
-Two backends. Pollinations needs no account and is the default, so image
-generation works out of the box; OpenAI's gpt-image family is used instead when
-a key is present and `JARVIS_IMAGE_PROVIDER=openai` is set, trading money for
-noticeably better results.
+Three backends, tried best-free-first.
+
+FLUX.1-dev on NVIDIA is the default when an NVIDIA key is present, because
+it is a real step up in quality and costs nothing on a key most people
+already have for chat. Pollinations is the backstop: it is the only one
+that needs no account at all, which is what makes image generation work on
+a completely fresh install. OpenAI's gpt-image family is used only when
+`JARVIS_IMAGE_PROVIDER=openai` is set explicitly, because having a key on
+file is not consent to bill it.
+
+Gemini's image models are deliberately not offered. They are listed on the
+key and answer every request with HTTP 429 and 'limit: 0' on the free
+tier, so wiring them up would mean shipping a button that never works.
 
 dall-e-3 was retired on 2026-03-04 and no longer serves requests, so it is not
 offered.
@@ -42,6 +51,11 @@ MAX_PROMPT_CHARS = 4000
 POLLINATIONS_URL = "https://image.pollinations.ai/prompt/"
 POLLINATIONS_TIMEOUT = 180  # Flux can be slow when the free tier is busy
 
+# FLUX.1-dev on NVIDIA. Free on the same key that drives Max mode, and a
+# clear step up in quality from the anonymous Pollinations endpoint.
+FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+FLUX_TIMEOUT = 150
+
 
 class ImageGenerationError(RuntimeError):
     """Raised when an image could not be produced."""
@@ -58,7 +72,11 @@ class ImageGenerator:
         prompt: str,
         size: str = "1024x1024",
         quality: str = DEFAULT_QUALITY,
+        seed: int | None = None,
     ) -> Path:
+        """Generate one image. A different `seed` gives a different picture
+        of the same prompt, which is what /vary relies on — with the seed
+        fixed at 0, asking twice returned the identical image."""
         prompt = (prompt or "").strip()
         if not prompt:
             raise ImageGenerationError("Please enter an image prompt.")
@@ -71,15 +89,11 @@ class ImageGenerator:
         if quality not in QUALITIES:
             quality = DEFAULT_QUALITY
 
-        if self._use_openai():
-            try:
-                data = self._generate_openai(prompt, size, quality)
-            except ImageGenerationError:
-                # Paid backend unavailable (no credit, bad key). Rather than
-                # hand back an error, quietly produce the image for free.
-                data = self._generate_pollinations(prompt, size)
-        else:
-            data = self._generate_pollinations(prompt, size)
+        if seed is None:
+            import random
+
+            seed = random.randint(1, 2_000_000_000)
+        data = self._render(prompt, size, quality, seed)
 
         path = self._free_path(get_output_dir() / self._filename(prompt, data))
         path.write_bytes(data)
@@ -102,6 +116,82 @@ class ImageGenerator:
                 return candidate
         return path.with_name(f"{stem}-{datetime.now():%f}{suffix}")
 
+    def _render(self, prompt: str, size: str, quality: str, seed: int = 0) -> bytes:
+        """Produce the image, best free backend first.
+
+        FLUX.1-dev on NVIDIA is a large step up from Pollinations and costs
+        nothing on a key most users already have for chat — measured at about
+        seven seconds for a 1024x1024. Pollinations stays as the backstop
+        because it is the only one that needs no account at all, which is what
+        makes image generation work on a fresh install.
+
+        Gemini's image models are deliberately absent. They exist on the key
+        and return HTTP 429 with 'limit: 0' for the free tier, so offering
+        them would mean a button that never works.
+        """
+        if self._use_openai():
+            try:
+                return self._generate_openai(prompt, size, quality)
+            except ImageGenerationError:
+                # Paid backend unavailable (no credit, bad key). Rather than
+                # hand back an error, quietly produce the image for free.
+                pass
+
+        if get_image_provider() in {"auto", "nvidia", "flux"}:
+            nvidia = providers.BY_NAME.get("nvidia")
+            if nvidia is not None and providers.has_key(nvidia):
+                try:
+                    return self._generate_flux(prompt, size, seed)
+                except ImageGenerationError:
+                    pass          # fall through to the always-available one
+
+        return self._generate_pollinations(prompt, size, seed)
+
+    def _generate_flux(self, prompt: str, size: str, seed: int = 0) -> bytes:
+        """FLUX.1-dev through NVIDIA's generative endpoint."""
+        import json
+        import os
+
+        width, height = (1024, 1024) if size == "auto" else map(int, size.split("x"))
+        # The endpoint only accepts multiples of 64, and rejects the whole
+        # request rather than rounding.
+        width, height = (max(256, w - w % 64) for w in (width, height))
+
+        payload = json.dumps({
+            "prompt": prompt,
+            "mode": "base",
+            "cfg_scale": 3.5,
+            "width": width,
+            "height": height,
+            "steps": 30,
+            "seed": int(seed) % 4_294_967_295,
+        }).encode("utf-8")
+
+        request = net.request(FLUX_URL, {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.getenv('NVIDIA_API_KEY', '').strip()}",
+            "Accept": "application/json",
+        })
+        request.data = payload
+        try:
+            with net.urlopen(request, timeout=FLUX_TIMEOUT) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ImageGenerationError(f"FLUX returned HTTP {exc.code}.") from None
+        except Exception as exc:
+            raise ImageGenerationError(f"FLUX was unreachable: {exc}") from None
+
+        encoded = body.get("image")
+        if not encoded:
+            artifacts = body.get("artifacts") or []
+            encoded = artifacts[0].get("base64") if artifacts else None
+        if not encoded:
+            raise ImageGenerationError("FLUX returned no image.")
+        try:
+            return base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            raise ImageGenerationError("FLUX returned an image I couldn't decode.")
+
     @staticmethod
     def _use_openai() -> bool:
         """Only spend money when explicitly told to.
@@ -114,7 +204,7 @@ class ImageGenerator:
 
     # --- free backend -----------------------------------------------------
 
-    def _generate_pollinations(self, prompt: str, size: str) -> bytes:
+    def _generate_pollinations(self, prompt: str, size: str, seed: int = 0) -> bytes:
         width, height = (1024, 1024) if size == "auto" else map(int, size.split("x"))
         query = urllib.parse.urlencode(
             {
@@ -123,6 +213,7 @@ class ImageGenerator:
                 "model": "flux",
                 "nologo": "true",
                 "referrer": providers.REFERRER,
+                "seed": int(seed),
             }
         )
         url = f"{POLLINATIONS_URL}{urllib.parse.quote(prompt, safe='')}?{query}"

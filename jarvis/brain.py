@@ -27,6 +27,11 @@ from .providers import Provider
 # Conversation turns (user + assistant messages) kept in context. The system
 # prompt is prepended separately and never counted against this.
 MAX_HISTORY_MESSAGES = 40
+# Past the limit the oldest turns are summarised, and the history is cut
+# back to this many so the summarising call is not made on every message.
+KEEP_AFTER_SUMMARY = 24
+SUMMARY_WORDS = 250
+MAX_SUMMARY_CHARS = 2400
 
 # How long a throttled provider is skipped before it's tried again. Long
 # enough to clear a per-minute limit, short enough that the user's preferred
@@ -82,6 +87,8 @@ class Brain:
         # catalogue but does not reply on the free tier, so without this
         # Hyperdrive pays its full 200-second leash on every single message.
         self._slow_targets: set[tuple[str, str]] = set()
+        # What earlier, trimmed turns said. Travels in the system prompt.
+        self.summary: str = ""
 
     # --- public ----------------------------------------------------------
 
@@ -116,6 +123,23 @@ class Brain:
         else:
             parts = [JARVIS_SYSTEM_PROMPT]
         parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
+
+        if self.summary:
+            parts.append(
+                "## Earlier in this conversation\n"
+                "These turns were condensed to save space. Treat them as what "
+                f"was already said:\n{self.summary}"
+            )
+
+        # Keep answers in the same language as the window. 4.0 claimed this
+        # and did not do it — the edit that was meant to add these lines never
+        # landed, and nothing tested for it — so the buttons turned Turkish
+        # while the replies stayed English.
+        from . import i18n
+
+        instruction = i18n.answer_instruction()
+        if instruction:
+            parts.append(instruction)
         return "\n\n".join(parts)
 
     def set_mode(self, name: str):
@@ -269,6 +293,15 @@ class Brain:
                 on_chunk(None)
                 shown = False
 
+            # Say what is happening, so a 40-second wait is a visible one.
+            # The previous attempt's failure is the last entry in `problems`,
+            # so reporting it here covers every failure branch below at once.
+            if problems:
+                self._status(f"{problems[-1][:80]} — trying {provider.label}…")
+            else:
+                self._status(f"Asking {provider.label} · {model}"
+                             + (f" (up to {int(timeout)}s)" if timeout else "") + "…")
+
             started = time.monotonic()
             try:
                 def chunk(text: str) -> None:
@@ -352,6 +385,13 @@ class Brain:
             problems.append(f"{provider.label}: empty response")
 
         detail = "\n".join(f"  - {p}" for p in problems)
+        if self.mode.only_providers:
+            only = ", ".join(self.mode.only_providers)
+            return None, (
+                f"{self.mode.label} only uses {only}, and it did not answer.\n"
+                f"{detail}\n\n"
+                "Switch to Max to let the other providers answer instead."
+            )
         return None, (
             f"I couldn't reach any AI provider.\n{detail}\n\n"
             "Add a free key to your .env — no card, no payment:\n"
@@ -394,6 +434,8 @@ class Brain:
 
         # Fallbacks get the ordinary timeout, not the mode's headline one.
         fallback = min(self.mode.timeout, self.mode.fallback_timeout)
+        if self.mode.only_providers:
+            chain = [p for p in chain if p.name in self.mode.only_providers]
         for provider in chain:
             model = self._model_override or providers.model_for(provider)
             if (provider.name, model) in seen:
@@ -560,6 +602,47 @@ class Brain:
             for marker in ("insufficient_quota", "billing", "credit", "exceeded your current quota")
         )
 
+    # --- visibility -------------------------------------------------------
+
+    status_callback: Callable[[str], None] | None = None
+
+    def _status(self, text: str) -> None:
+        """Tell whoever is listening what the chain is doing. Never raises."""
+        callback = self.status_callback
+        if callback is None:
+            return
+        try:
+            callback(text)
+        except Exception:
+            pass
+
+    def health(self) -> list[tuple[str, str]]:
+        """(provider label, state) for every configured provider.
+
+        state is 'ok' (answered last), 'ready', 'cooling' (throttled, will be
+        retried shortly) or 'dead' (bad key or no credit — skipped this
+        session). Read from what the chain has already learned; nothing is
+        sent to find out.
+        """
+        now = time.monotonic()
+        out: list[tuple[str, str]] = []
+        # The chain, not every keyed provider: an opt-in one that has a key
+        # but was never promoted is not something this brain will call, and
+        # listing it here as "ready" alongside its "opt-in" line said both.
+        for provider in providers.chat_chain():
+            if provider.transport == "http":
+                continue
+            if provider.name in self._dead:
+                state = "dead"
+            elif self._cooldown.get(provider.name, 0.0) > now:
+                state = "cooling"
+            elif self._active is provider:
+                state = "ok"
+            else:
+                state = "ready"
+            out.append((provider.label, state))
+        return out
+
     def reset_failures(self) -> None:
         """Forget which providers failed — call after keys change.
 
@@ -596,10 +679,52 @@ class Brain:
         )
 
     def _trim(self) -> None:
-        if len(self.history) > MAX_HISTORY_MESSAGES:
-            # Drop oldest turns in pairs so the log always starts on a user message.
-            excess = len(self.history) - MAX_HISTORY_MESSAGES
-            self.history = self.history[excess + (excess % 2) :]
+        """Keep the history bounded without forgetting how it started.
+
+        Turns used to be dropped outright past the limit, so a long session
+        quietly lost its own beginning — the decision made in the first ten
+        minutes simply stopped existing. Now the oldest turns are folded into
+        a running summary that travels in the system prompt.
+
+        It trims down to KEEP_AFTER_SUMMARY rather than to the limit, so the
+        summarising call happens once every eight exchanges instead of on
+        every single message.
+        """
+        if len(self.history) <= MAX_HISTORY_MESSAGES:
+            return
+        cut = len(self.history) - KEEP_AFTER_SUMMARY
+        cut += cut % 2          # stay aligned: the log must start on a user turn
+        dropped, self.history = self.history[:cut], self.history[cut:]
+        self._fold_into_summary(dropped)
+
+    def _fold_into_summary(self, dropped: list[dict]) -> None:
+        transcript = "\n".join(
+            f"{'User' if m.get('role') == 'user' else 'JARVIS'}: {m.get('content', '')[:1500]}"
+            for m in dropped
+        )
+        request = [{
+            "role": "user",
+            "content": (
+                "Update the running summary of a conversation. Keep decisions, "
+                "facts about the user, names, file names, numbers and anything "
+                "still unresolved. Drop pleasantries and anything superseded. "
+                f"Under {SUMMARY_WORDS} words, plain prose, no heading.\n\n"
+                f"Summary so far:\n{self.summary or '(none yet)'}\n\n"
+                f"Earlier exchanges to fold in:\n{transcript}"
+            ),
+        }]
+        try:
+            reply, _error = self._chat_over_chain(request)
+        except Exception:
+            reply = None
+        if reply:
+            self.summary = reply.strip()[:MAX_SUMMARY_CHARS]
+        elif not self.summary.endswith("could not be summarised.)"):
+            # Say so rather than pretend: an honest gap beats a fabricated one.
+            self.summary = (
+                self.summary + "\n(Some earlier turns could not be summarised.)"
+            ).strip()
 
     def clear_history(self) -> None:
         self.history.clear()
+        self.summary = ""

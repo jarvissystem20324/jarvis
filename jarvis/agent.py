@@ -106,6 +106,8 @@ class Plan:
     goal: str
     steps: list[Step] = field(default_factory=list)
     risk: str = ""
+    # Filled in by the agent before approval: on a branch, or in place.
+    where: str = ""
 
     @property
     def writes(self) -> list[str]:
@@ -137,6 +139,8 @@ class Plan:
         if self.commands:
             lines += ["", "Commands it will run:"]
             lines += [f"  {c}" for c in dict.fromkeys(self.commands)]
+        if self.where:
+            lines += ["", f"Where: {self.where}"]
         if self.risk:
             lines += ["", f"Risk: {self.risk}"]
         return "\n".join(lines)
@@ -200,6 +204,8 @@ class Agent:
         self.plan: Plan | None = None
         self.root: Path | None = None
         self.written: list[tuple[Path, Path | None]] = []
+        # (original branch, work branch) after a run that used one.
+        self.last_branch: tuple[str, str] | None = None
 
     # --- project ----------------------------------------------------------
 
@@ -246,6 +252,7 @@ class Agent:
             raise AgentError(
                 f"I couldn't turn that into a plan.\n\n{plan.risk or plan.goal}"
             )
+        _will, plan.where = self.branch_plan()
         self.plan = plan
         return plan
 
@@ -264,11 +271,114 @@ class Agent:
 
     # --- execution --------------------------------------------------------
 
+    # --- working on a branch ----------------------------------------------
+    # When the project is a git repository with a clean working tree, the
+    # agent does its work on a fresh branch, commits it there, and switches
+    # back. Your working tree is never touched: the result is a branch you can
+    # diff, merge or delete. The *harness* does these git writes — the model's
+    # plan still cannot run any git command that changes anything.
+
+    def _git(self, *args: str) -> tuple[int, str]:
+        from . import vcs
+
+        try:
+            return vcs._run(self.root, *args)
+        except vcs.GitError as exc:
+            return 1, str(exc)
+
+    def branch_plan(self) -> tuple[bool, str]:
+        """(will branch, sentence explaining the decision)."""
+        if self.root is None or not (self.root / ".git").exists():
+            return False, "Not a git repository, so changes are made in place (/undo reverts them)."
+        code, dirty = self._git("status", "--porcelain")
+        if code != 0:
+            return False, "git is unavailable, so changes are made in place (/undo reverts them)."
+        if dirty.strip():
+            # Branching now would carry your uncommitted edits along and mix
+            # them with the agent's, which is the opposite of isolation.
+            return False, (
+                "Your working tree has uncommitted changes, so I'll work in "
+                "place rather than on a branch (/undo reverts my changes)."
+            )
+        code, head = self._git("rev-parse", "--abbrev-ref", "HEAD")
+        if code != 0 or head.strip() in {"", "HEAD"}:
+            return False, "No branch is checked out, so changes are made in place."
+        return True, "Works on a new branch and commits there; your working tree is left alone."
+
+    def _start_branch(self) -> tuple[str, str] | None:
+        will, _why = self.branch_plan()
+        if not will:
+            return None
+        _code, original = self._git("rev-parse", "--abbrev-ref", "HEAD")
+        original = original.strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", self.plan.goal.lower()).strip("-")[:40] or "task"
+        from datetime import datetime
+
+        name = f"jarvis/{slug}-{datetime.now():%H%M%S}"
+        code, out = self._git("switch", "-c", name)
+        if code != 0:
+            code, out = self._git("checkout", "-b", name)
+        if code != 0:
+            return None
+        security.audit.record("agent branch", name, f"from {original}")
+        return original, name
+
+    def _finish_branch(self, original: str, name: str) -> str:
+        """Commit what was written onto the branch, then go back."""
+        from . import vcs
+
+        if not self.written:
+            self._git("switch", original)
+            self._git("branch", "-D", name)
+            return "Nothing was changed, so the work branch was removed."
+
+        relative = [str(path.relative_to(self.root)) for path, _backup in self.written]
+        self._git("add", "--", *relative)
+
+        leaks = vcs._secret_check(self.root)
+        if leaks:
+            # Do not commit, and do not switch back: switching would carry the
+            # uncommitted changes onto your branch.
+            return (
+                f"I did NOT commit: the changes on {name} contain what looks "
+                f"like a credential. You are still on {name} with the changes "
+                "staged. Remove it, then commit or discard by hand."
+            )
+
+        code, out = self._git("commit", "-m", f"JARVIS agent: {self.plan.goal[:120]}")
+        if code != 0:
+            return (
+                f"The changes are on {name} but could not be committed:\n{out[:300]}\n"
+                f"You are still on {name}."
+            )
+        self._git("switch", original)
+        security.audit.record("agent commit", name, f"{len(relative)} file(s)")
+
+        # The files on your branch were never touched, so there is nothing
+        # for the file-level undo to restore; /undo deletes the branch instead.
+        self.written = []
+        self.last_branch = (original, name)
+        return (
+            f"The work is on branch {name} ({len(relative)} file(s), one commit).\n"
+            f"You are back on {original}, unchanged.\n"
+            f"  Review:  /git diff {original}..{name}\n"
+            f"  Keep:    git merge {name}\n"
+            f"  Discard: /undo"
+        )
+
     def run(self, on_progress=None, should_continue=None) -> str:
         """Carry out the approved plan. Returns a report."""
         if self.plan is None:
             raise AgentError("There is no approved plan to run.")
 
+        self.last_branch = None
+        branch = self._start_branch()
+        report = self._run_steps(on_progress, should_continue)
+        if branch is not None:
+            report += "\n\n" + self._finish_branch(*branch)
+        return report
+
+    def _run_steps(self, on_progress=None, should_continue=None) -> str:
         def say(text: str) -> None:
             if on_progress is not None:
                 on_progress(text)
@@ -459,6 +569,14 @@ class Agent:
 
     def undo(self) -> str:
         """Put every file this run touched back the way it was."""
+        if self.last_branch and not self.written:
+            original, name = self.last_branch
+            code, out = self._git("branch", "-D", name)
+            self.last_branch = None
+            if code != 0:
+                return f"Could not delete {name}: {out[:200]}"
+            security.audit.record("agent undo", f"deleted {name}")
+            return f"Deleted branch {name}. {original} was never changed."
         if not self.written:
             return "The agent hasn't written anything to undo."
         import shutil

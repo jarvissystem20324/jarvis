@@ -51,7 +51,7 @@ RESERVED_COMMANDS = frozenset({
     "scan", "sandbox", "audit", "privacy", "security",
     "bench", "compare", "chat", "chats",
     "agent", "fix", "web", "stats", "lang", "theme",
-    "index", "where", "git", "tasks", "task",
+    "index", "where", "git", "tasks", "task", "trace", "testgen", "recall", "docs", "vary", "health", "release",
 })
 
 

@@ -1,4 +1,4 @@
-# JARVIS 4.0
+# JARVIS 5.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -22,7 +22,8 @@ Then put **at least two** keys in `.env` — providers rate limit, run out of cr
 | Google Gemini | <https://aistudio.google.com/apikey> | Yes — best quality, sees images |
 | Groq | <https://console.groq.com/keys> | Yes — fastest, also does speech-to-text |
 | Inception Mercury | <https://platform.inceptionlabs.ai> | Yes — 100M free tokens, ~1s replies |
-| NVIDIA NIM | <https://build.nvidia.com> | Yes — fast, but most of its models time out |
+| NVIDIA NIM | <https://build.nvidia.com> | Yes — fast; also makes the images (FLUX) |
+| OpenRouter | <https://openrouter.ai/keys> | Yes — 200/day, and can't be broken by a retired model |
 
 ```bash
 python app.py
@@ -38,15 +39,30 @@ python main.py
 
 | Capability | Free option | Needs a key? |
 | --- | --- | --- |
-| **Images** | Pollinations (Flux) | No — works out of the box |
+| **Images** | FLUX.1-dev on NVIDIA, else Pollinations | Better with the NVIDIA key; works with none |
 | **Chat** | Gemini or Groq free tier | A free key |
 | **Speech out** | Built-in Windows voices | No |
 | **Speech in** | Groq Whisper, or local faster-whisper | A free key, or nothing if local |
 
 Set `JARVIS_PROVIDER` to pin one backend, or leave it `auto` to try each in
-turn — Gemini, Groq, NVIDIA, then OpenAI. A key that gets rejected or runs out of
-credit is dropped for the session and the next provider takes over, so one dead
-key doesn't take the app down.
+turn — Gemini, Groq, Inception, NVIDIA, OpenRouter, then OpenAI: free before
+paid, always. A key that gets rejected or runs out of credit is dropped for the
+session and the next provider takes over, so one dead key doesn't take the app
+down.
+
+### Opt-in providers
+
+Some providers are known to JARVIS but never tried unless you say so, because
+a provider that takes 90 seconds to fail adds those 90 seconds to every
+failover. Blueminds is one: a third-party relay that resells other companies'
+models, so your prompts pass through its servers too. When tested on 24
+September 2026 its key was accepted but every model timed out at its gateway,
+and two answered "end of life". `/bench` measures it under *opt-in*, so you can
+see when it recovers; then promote it with:
+
+```
+JARVIS_EXTRA_PROVIDERS=blueminds
+```
 
 OpenAI still works and is still the best quality, but it is now strictly
 optional. `JARVIS_IMAGE_PROVIDER=auto` deliberately means *free*: having an
@@ -94,6 +110,14 @@ free keys above. `JARVIS_PROVIDER=pollinations` still pins it if you want it.
 | `/stats` | Which providers you use and how fast they are |
 | `/task ...` | Scheduled tasks, while JARVIS is open |
 | `/lang <en\|tr>` | Interface language |
+| `/trace [traceback]` | Explain an error against your real code. Bare `/trace` reads the clipboard; `/trace fix` repairs it |
+| `/testgen <file>` | The agent writes tests for a file, and runs them |
+| `/docs <folder\|question>` | Index a folder of PDFs and notes, then ask across it with citations |
+| `/recall <words>` | Search every saved conversation, not just this one |
+| `/vary [n] [tweak]` | More versions of the last image |
+| `/health` | Providers, disk, .env, updates — on one screen |
+| `/release` | For working on JARVIS: the pre-release checklist, run for real |
+| `/setup` | The first-run guide again |
 
 ### Security
 
@@ -140,11 +164,17 @@ tiers actually serve rather than by what sounds impressive:
 | **Mid** | Inception `mercury-2.5` | ~2s |
 | **High** | Gemini `gemini-3.6-flash` | ~9s |
 | **Max** | NVIDIA `nemotron-3-super-120b-a12b` | ~4s |
-| **Hyperdrive** | kimi-k3, falling back to the 120B | 40s once, then ~2s |
+| **Hyperdrive** | kimi-k3, then the 120B — **NVIDIA only** | 40s once, then ~2s |
 | **Security** | Groq `openai/gpt-oss-120b` | ~2s |
 
 A target is a *preference*. If the key is missing or the model is retired,
-that tier falls through to the normal provider chain and still answers.
+that tier falls through to the normal provider chain and still answers —
+except Hyperdrive, which is NVIDIA's heaviest models and nothing else. If
+NVIDIA is down, Hyperdrive says so and suggests Max, rather than quietly
+answering from Gemini under the Hyperdrive name.
+
+Past 40 turns the oldest are condensed into a running summary rather than
+dropped, so a long session no longer forgets how it started.
 
 Any tier can be re-pointed without a new release, from Settings or by hand:
 
@@ -324,6 +354,27 @@ Accessibility permission — the one a keylogger asks for — and a fresh instal
 should not be demanding it. Updates are manual there because rewriting anything
 inside a signed `.app` invalidates its signature, after which macOS refuses to
 open it at all.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Around 170 tests, none of which call a provider — they test what JARVIS does
+with an answer, not the answer, so they need no keys and run in about a
+minute. Every push runs them on Windows and Linux through GitHub Actions
+(`.github/workflows/tests.yml`), with coverage.
+
+Many exist because the thing they check was once broken: the dead 3.0 update
+button, code mode forgetting its creator, `echo x & hostname` actually running
+`hostname`, a cached manifest hiding an update. The comment on each says which.
+
+From inside JARVIS, `/release` runs the same checklist this project uses
+before shipping: version strings agree, the release notes are for this
+version, no `.env` is anywhere near git, the security scan is clean, the tests
+pass.
 
 ## Building the EXE and installer
 

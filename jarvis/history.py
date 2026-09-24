@@ -115,7 +115,7 @@ def delete_chat(name: str) -> bool:
 
 
 def save(messages: list[dict], mode: str = "", code_mode: bool = False,
-         name: str | None = None) -> None:
+         name: str | None = None, summary: str = "") -> None:
     """Write the conversation. Best effort — never interrupts the app."""
     try:
         payload = {
@@ -123,6 +123,8 @@ def save(messages: list[dict], mode: str = "", code_mode: bool = False,
             "saved": datetime.now().isoformat(timespec="seconds"),
             "mode": mode,
             "code_mode": code_mode,
+            # What trimmed-away turns said, so a restart does not lose it.
+            "summary": summary,
             "messages": messages[-MAX_SAVED_MESSAGES:],
         }
         _path(name).write_text(
@@ -157,6 +159,46 @@ def load(name: str | None = None) -> tuple[list[dict], str, bool]:
         and isinstance(m.get("content"), str)
     ]
     return clean, str(data.get("mode") or ""), bool(data.get("code_mode"))
+
+
+def load_summary(name: str | None = None) -> str:
+    """The running summary saved with a conversation, or ''."""
+    path = _path(name)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("summary") or "") if isinstance(data, dict) else ""
+
+
+def search_all(needle: str, limit: int = 30) -> list[tuple[str, str, str]]:
+    """Every saved conversation's matches: (conversation, who, snippet).
+
+    /find only ever searched the conversation on screen. The answer you want
+    is usually in another one — which is exactly when you cannot remember
+    which.
+    """
+    needle = needle.strip().lower()
+    if not needle:
+        return []
+    hits: list[tuple[str, str, str]] = []
+    for chat in list_chats():
+        messages, _mode, _code = load(chat["name"])
+        sources = [("summary", load_summary(chat["name"]))] + [
+            ("You" if m["role"] == "user" else "JARVIS", m["content"]) for m in messages
+        ]
+        for who, text in sources:
+            low = text.lower()
+            at = low.find(needle)
+            if at == -1:
+                continue
+            start = max(0, at - 60)
+            snippet = " ".join(text[start:at + len(needle) + 90].split())
+            prefix = "…" if start else ""
+            hits.append((chat["name"], who, prefix + snippet))
+            if len(hits) >= limit:
+                return hits
+    return hits
 
 
 def clear(name: str | None = None) -> None:
