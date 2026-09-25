@@ -8,6 +8,7 @@ the whole run in conftest), so they are logged, never carried out.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from datetime import datetime
 
@@ -260,6 +261,7 @@ def test_spending_exports_to_excel(jarvis):
     assert book["By month"]["D2"].value == 45
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 def test_spending_is_encrypted_at_rest(jarvis, base):
     jarvis.process("/spent 45 secret lunch")
     raw = (base / "data" / spending.FILE).read_bytes()
