@@ -14,6 +14,7 @@ folder, so each importer is patched by name below.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Set for the whole run, fixture or not: a routing test that reaches
+# /power by mistake must log "shutdown /s", not shut the developer's PC down.
+os.environ["JARVIS_POWER_DRYRUN"] = "1"
 
 
 def fake_key(prefix: str, body: str = "AbCdEf0123456789AbCdEf0123456789") -> str:
@@ -79,6 +84,13 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setattr(reminders, "get_data_dir", lambda: data)
     monkeypatch.setattr(reminders.board, "items", [])
     monkeypatch.setattr(reminders.board, "missed", [])
+    from jarvis import power, spending
+
+    monkeypatch.setattr(spending, "get_data_dir", lambda: data)
+    monkeypatch.delenv("JARVIS_CURRENCY", raising=False)
+    monkeypatch.delenv("JARVIS_BUDGET", raising=False)
+    power._pending.clear()
+    power.dry_log.clear()
 
     security.privacy.on = False
     security.permissions.set_asker(None)

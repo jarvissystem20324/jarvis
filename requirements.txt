@@ -19,6 +19,8 @@ psutil>=7.0.0
 # 7.0: QR codes, and the time-zone database Windows' Python lacks.
 qrcode>=8.0
 tzdata>=2025.1
+# 7.1: YouTube captions for /yt.
+youtube-transcript-api>=1.2.0
 
 # Optional: fully offline speech-to-text, no key and no network.
 # pip install faster-whisper

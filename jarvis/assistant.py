@@ -16,6 +16,7 @@ from .addons import AddonManager
 from .brain import Brain
 from .everyday import HELP, Everyday
 from .extras import Extras
+from .toolkit import Toolkit
 from .config import voice_enabled_by_default
 from .images import DEFAULT_QUALITY, ImageGenerationError, ImageGenerator
 from .voice import Voice
@@ -31,7 +32,7 @@ class JarvisResponse:
     image_paths: list[Path] = field(default_factory=list)
 
 
-class Jarvis(Everyday, Extras):
+class Jarvis(Everyday, Extras, Toolkit):
     def __init__(self, voice_enabled: bool | None = None):
         # Files written by earlier versions are plain JSON; seal them now so
         # encryption covers what is already on disk, not only what is new.
@@ -301,6 +302,8 @@ class Jarvis(Everyday, Extras):
             everyday = self.everyday_command(name, args)
             if everyday is None:
                 everyday = self.extras_command(name, args)
+            if everyday is None:
+                everyday = self.toolkit_command(name, args)
             if everyday is not None:
                 if isinstance(everyday, JarvisResponse):
                     return everyday
@@ -323,6 +326,10 @@ class Jarvis(Everyday, Extras):
                     builtin = self._with_addon_help(builtin)
                 self._maybe_speak(builtin)
                 return JarvisResponse(text=builtin)
+
+        # A running quiz takes plain messages as answers; commands still work.
+        if getattr(self, "_quiz", None) is not None:
+            return JarvisResponse(text=self.quiz_reply(text))
 
         # Live translation takes every line while it is on.
         if self._translate_to:

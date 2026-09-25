@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the JARVIS desktop app."""
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 # The built-in addons ride along as data and are copied out beside the EXE on
 # first run, so users can read and edit them like any other addon.
@@ -56,6 +56,12 @@ for pkg in ("edge_tts", "docx", "fpdf", "openpyxl", "qrcode", "tzdata"):
     except Exception:
         pass
 hiddenimports += ["psutil", "aiohttp", "docx.oxml", "fpdf.fonts"]
+# 7.1: YouTube captions (it brings requests, and defusedxml for the caption XML).
+try:
+    hiddenimports += collect_submodules("youtube_transcript_api") + ["requests", "defusedxml"]
+    datas += collect_data_files("youtube_transcript_api")
+except Exception:
+    pass
 
 a = Analysis(
     ["app.py"],

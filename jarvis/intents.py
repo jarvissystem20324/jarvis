@@ -159,6 +159,49 @@ def route(text: str) -> tuple[str, bool] | None:
     if low in {"lock", "lock jarvis", "lock the app", "lock yourself"}:
         return "/lock", False
 
+    # --- 7.1: study, video, money, the PC ---
+    m = re.fullmatch(r"(?:quiz|test)\s+me(?:\s+(?:on|about)\s+(.+))?", t, re.I)
+    if m:
+        return f"/quiz {m.group(1) or ''}".rstrip(), False
+    m = re.fullmatch(r"(?:make|create|give\s+me)\s+(?:some\s+)?(\d+\s+)?flash\s?cards\s+(?:for|on|about|from)\s+(.+)", t, re.I)
+    if m:
+        return f"/flashcards {m.group(1) or ''}{m.group(2)}", False
+    from . import youtube
+
+    link = re.search(r"https?://(?:www\.|m\.)?(?:youtube\.com|youtu\.be)/\S+", t)
+    if link and youtube.video_id(link.group(0)):
+        rest = (t[:link.start()] + " " + t[link.end():]).strip(" :,-")
+        if re.fullmatch(r"(?:(?:please\s+)?(?:summari[sz]e|sum\s+up|tl;?dr|watch|özetle)(?:\s+(?:this|the|that))?(?:\s+(?:video|one))?(?:\s+for\s+me)?)?", rest, re.I):
+            rest = ""
+        return f"/yt {link.group(0)} {rest}".rstrip(), False
+    if re.fullmatch(r"(?:start\s+)?record(?:ing)?\s+(?:this|the|my)\s+(?:lecture|meeting|class|lesson|call|talk)|start\s+recording|dersi\s+kaydet", low):
+        return "/record start", False
+    if re.fullmatch(r"stop\s+(?:the\s+)?recording|(?:finish|end)\s+(?:the\s+)?recording", low):
+        return "/record stop", False
+    m = re.fullmatch(r"(?:i\s+)?(?:just\s+)?(?:spent|paid)\s+(.*\d.*)", t, re.I)
+    if m and not re.search(r"\d\s*(?:hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?|saat|dakika|gün)\b", low):
+        return f"/spent {m.group(1)}", False
+    m = re.fullmatch(r"how\s+much\s+(?:did|have)\s+i\s+spen[td](?:\s+(today|this\s+week|this\s+month|last\s+month|this\s+year))?(?:\s+so\s+far)?", low)
+    if m:
+        return f"/spent {m.group(1) or 'month'}", False
+    if low in {"my spending", "show my spending", "spending", "my expenses", "expenses"}:
+        return "/spent month", False
+    if re.fullmatch(r"(?:how\s+fast\s+is\s+(?:my|the)\s+(?:internet|wi-?fi|connection)|(?:run\s+an?\s+|do\s+an?\s+)?(?:internet\s+)?speed\s*test"
+                    r"|(?:check|test)\s+(?:my\s+|the\s+)?(?:internet|wi-?fi|connection)(?:\s+speed)?|internet\s+speed|internet\s+hızı)", low):
+        return "/speedtest", False
+    pc_word = r"(?:the\s+|my\s+|this\s+)?(?:pc|computer|laptop|bilgisayar(?:ı)?)"
+    m = re.fullmatch(rf"(shut\s*down|turn\s+off|power\s+off|restart|reboot)\s+{pc_word}(\s+(?:in|at)\s+.+)?", low)
+    if m:
+        action = "restart" if m.group(1) in {"restart", "reboot"} else "shutdown"
+        return f"/power {action}{m.group(2) or ''}", False
+    m = re.fullmatch(rf"(?:put\s+{pc_word}\s+to\s+sleep|sleep\s+{pc_word})(\s+(?:in|at)\s+.+)?", low)
+    if m:
+        return f"/power sleep{m.group(1) or ''}", False
+    if re.fullmatch(rf"lock\s+(?:{pc_word}|(?:the\s+|my\s+)?(?:screen|windows|workstation))", low):
+        return "/power lock", False
+    if re.fullmatch(r"(?:cancel|abort|stop)\s+(?:the\s+)?(?:shutdown|shut\s+down|restart|reboot|sleep)", low):
+        return "/power cancel", False
+
     # --- opening apps and folders (last: the loosest) ---
     m = re.fullmatch(r"(?:open|launch|start)\s+(?:up\s+)?(.+)", t, re.I)
     if m and len(m.group(1)) <= 60:

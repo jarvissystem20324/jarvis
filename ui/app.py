@@ -578,6 +578,14 @@ class JarvisApp(ctk.CTk):
             threading.Thread(target=work, daemon=True).start()
             notify.toast("JARVIS — Good morning", "Your briefing is ready.")
             return
+        if item.kind == "sleep":
+            # Asked for and approved when it was booked (/power sleep in …).
+            from jarvis import power
+
+            self._append_message("JARVIS", "💤 Going to sleep now, as asked.", is_user=False, record=False)
+            power._pending.clear()
+            self.after(3000, self.jarvis._sleep_safely)
+            return
         icon = {"timer": "⏱", "alarm": "⏰"}.get(item.kind, "🔔")
         title = {"timer": "Timer done", "alarm": "Alarm"}.get(item.kind, "Reminder")
         text = item.text or title

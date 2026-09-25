@@ -223,6 +223,23 @@ def selftest() -> int:
 
     check("screen text (OCR)", _ocr)
 
+    # 7.1
+    def _captions() -> str:
+        from youtube_transcript_api import YouTubeTranscriptApi  # noqa: F401
+        from jarvis import youtube
+
+        return "YouTube captions ready" if youtube.video_id("https://youtu.be/dQw4w9WgXcQ") else "bad link parser"
+
+    def _spending() -> str:
+        from jarvis import spending
+
+        entry = spending.parse("1.250,50 tl groceries")
+        return f"spending log, parsed {entry['amount']:g} {entry['currency']}"
+
+    check("YouTube summaries", _captions)
+    check("spending", _spending)
+    check("power controls", lambda: "shutdown.exe present" if __import__("shutil").which("shutdown") else "not on this platform")
+
     from jarvis import config as _cfg
     if getattr(_cfg, "last_env_changes", None):
         for change in _cfg.last_env_changes:

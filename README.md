@@ -1,4 +1,4 @@
-# JARVIS 7.0
+# JARVIS 7.1
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -134,6 +134,22 @@ speak, let go, and the words are typed where your cursor is.
 `/data` never lets the model compute or run code. It sees column names and
 six sample rows, answers with a small query, and JARVIS runs that query
 itself — so a sum is a sum, not an estimate.
+
+## Study, video, money and power (7.1)
+
+| Say or type | What happens |
+| --- | --- |
+| `quiz me on photosynthesis` · `/quiz notes.pdf` | A multiple-choice quiz, one question at a time. Answer A–D, `skip`, `stop`; `/quiz again` retries the ones you missed. With a document or video open, `/quiz` tests you on it |
+| `/flashcards <topic\|file>` | Study cards saved as a CSV that Anki and Quizlet import |
+| `/yt <YouTube link> [question]` | Reads the video's captions: a summary with `[m:ss]` timestamps, or an answer. Follow-ups keep the video open |
+| `record this lecture` → `/record stop` | Listens and transcribes in four-minute pieces as it goes, then writes notes (summary, key points, action items) to a Word file with the transcript at the end. Audio is never saved |
+| `I spent 45 on lunch` · `how much did I spend this month` | A spending log, sealed like notes. Totals by category and currency, `/spent week`, `/spent undo`, `/spent export` (Excel), `/spent budget 5000` |
+| `how fast is my internet` | Ping, download and upload via Cloudflare, about ten seconds |
+| `shut down in 30 minutes` · `restart my pc` · `lock my pc` | `/power shutdown\|restart\|sleep\|lock`, always asked first; even "now" leaves 30 seconds, and `cancel shutdown` stops it |
+
+Quiz answers are graded here, not by a model, so a grade is never generous.
+Captions, documents and web pages are treated as untrusted text (see the
+prompt-injection shield) before any of it reaches a model.
 
 ## Commands
 

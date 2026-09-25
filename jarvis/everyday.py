@@ -68,6 +68,17 @@ Exact answers and tools
   generate a password (to the clipboard, never shown)   /password [length]
   /qr <text>   /stopwatch start|stop|lap|reset   /memory — edit what I remember
 
+Study, video and money
+  quiz me on photosynthesis · /quiz notes.pdf · answer A-D     /quiz [again|stop]
+  /flashcards <topic|file>   cards for Anki or Quizlet (.csv)
+  /yt <YouTube link> [question]   summary with timestamps, then ask follow-ups
+  record this lecture — /record stop writes the notes (Word)   /record status|cancel
+  I spent 45 on lunch · how much did I spend this month       /spent [week|export|budget 5000]
+
+Your PC
+  how fast is my internet      ping, download, upload          /speedtest
+  shut down in 30 minutes · restart · sleep · lock my pc        /power [cancel|status]
+
 Coding
   /project <folder>  /agent <task>  /fix  /trace  /testgen <file>  /commit
   /review  /pr  /explain <file|name>  /todo  /changes  /revert <file>
@@ -133,6 +144,8 @@ class Everyday:
         result = self.everyday_command(name, args, routed=may_fall_through)
         if result is None:
             result = self.extras_command(name, args, routed=may_fall_through)
+        if result is None:
+            result = self.toolkit_command(name, args, routed=may_fall_through)
         return result
 
     # --- media, apps, files, PC ------------------------------------------
