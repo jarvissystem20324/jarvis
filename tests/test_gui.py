@@ -272,10 +272,10 @@ def test_the_update_button_starts_a_download(app, monkeypatch):
     """3.0 shipped with this button raising AttributeError before downloading."""
     import ui.app as ui_app
 
-    started = []
+    started, applied = [], []
     monkeypatch.setattr(ui_app.updater, "download_update",
                         lambda info, progress=None: started.append(1) or info)
-    monkeypatch.setattr(ui_app.updater, "apply_update", lambda path: None)
+    monkeypatch.setattr(ui_app.updater, "apply_update", lambda path: applied.append(path))
 
     class Info:
         version, notes = "9.9", "x"
@@ -284,9 +284,11 @@ def test_the_update_button_starts_a_download(app, monkeypatch):
     dialog._install()
     import time
 
-    for _ in range(20):
+    # Wait for the worker to finish applying too: one still running after this
+    # test ended once called the *next* test's patched apply_update.
+    for _ in range(60):
         app.update()
-        if started:
+        if started and applied:
             break
         time.sleep(0.05)
     assert started

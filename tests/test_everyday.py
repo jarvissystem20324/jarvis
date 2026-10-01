@@ -186,7 +186,7 @@ def test_the_agent_model_can_be_changed(monkeypatch, value, expected):
     assert modes.agent_targets() == expected
 
 
-def test_the_agent_model_is_tried_first_even_though_blueminds_is_opt_in(monkeypatch):
+def test_the_agent_model_is_tried_first(monkeypatch):
     from jarvis.brain import Brain
 
     monkeypatch.setenv("BLUEMINDS_API_KEY", "test")
@@ -195,7 +195,8 @@ def test_the_agent_model_is_tried_first_even_though_blueminds_is_opt_in(monkeypa
     attempts = brain._attempts(brain._chain(), extra=modes.agent_targets(), extra_timeout=150)
     assert (attempts[0][0].name, attempts[0][1]) == ("blueminds", "openrouter/z-ai/glm-5-turbo")
     assert attempts[0][2] == 150
-    assert "blueminds" not in [p.name for p in brain._chain()]    # still opt-in for chat
+    chain = [p.name for p in brain._chain()]
+    assert chain.index("blueminds") > chain.index("groq")         # paid, so after the free ones
 
 
 def test_a_refused_agent_model_falls_back_and_says_why(monkeypatch):

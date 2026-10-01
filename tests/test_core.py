@@ -427,23 +427,39 @@ def test_the_manifest_is_never_fetched_from_cache():
 
 # --- opt-in providers ------------------------------------------------------
 
-def test_an_opt_in_provider_is_never_in_the_chain_by_default(monkeypatch):
-    """A relay that takes 90s to fail would add 90s to every failover."""
+def _relay(monkeypatch):
+    """An opt-in provider for the mechanism tests (Blueminds left it in 8.0.1)."""
     from jarvis import providers
 
-    monkeypatch.setenv("BLUEMINDS_API_KEY", "test")
+    relay = providers.Provider(name="relay", label="Relay", base_url="https://relay.test/v1",
+                               key_env="RELAY_API_KEY", chat_model="m", free=False)
+    monkeypatch.setattr(providers, "OPT_IN_PROVIDERS", (relay,))
+    monkeypatch.setenv("RELAY_API_KEY", "test")
+    return providers
+
+
+def test_an_opt_in_provider_is_never_in_the_chain_by_default(monkeypatch):
+    """A relay that takes 90s to fail would add 90s to every failover."""
+    providers = _relay(monkeypatch)
     monkeypatch.delenv("JARVIS_EXTRA_PROVIDERS", raising=False)
-    assert "blueminds" not in [p.name for p in providers.chat_chain()]
-    assert "blueminds" in [p.name for p in providers.keyed_but_idle()]
+    assert "relay" not in [p.name for p in providers.chat_chain()]
+    assert "relay" in [p.name for p in providers.keyed_but_idle()]
 
 
 def test_an_opt_in_provider_joins_the_chain_last_when_promoted(monkeypatch):
+    providers = _relay(monkeypatch)
+    monkeypatch.setenv("JARVIS_EXTRA_PROVIDERS", "relay")
+    chain = [p.name for p in providers.chat_chain()]
+    assert chain[-1] == "relay"
+
+
+def test_blueminds_is_paid_so_it_comes_after_every_free_provider(monkeypatch):
     from jarvis import providers
 
-    monkeypatch.setenv("BLUEMINDS_API_KEY", "test")
-    monkeypatch.setenv("JARVIS_EXTRA_PROVIDERS", "blueminds")
-    chain = [p.name for p in providers.chat_chain()]
-    assert chain[-1] == "blueminds"
+    names = [p.name for p in providers.AUTO_CHAT_PROVIDERS]
+    assert names.index("blueminds") > max(names.index(n) for n in ("gemini", "groq", "mistral", "cloudflare", "openrouter"))
+    assert names.index("blueminds") < names.index("openai")
+    assert providers.BLUEMINDS.chat_model == "meta/llama-3.2-11b-vision-instruct" and providers.BLUEMINDS.vision
 
 
 def test_hyperdrive_never_leaves_nvidia(monkeypatch):
@@ -498,7 +514,7 @@ def test_health_lists_each_provider_once(monkeypatch):
     monkeypatch.delenv("JARVIS_EXTRA_PROVIDERS", raising=False)
     labels = [label for label, _ in Brain().health()]
     assert len(labels) == len(set(labels))
-    assert "Blueminds" not in labels          # opt-in and not promoted
+    assert labels.count("Blueminds") == 1     # in the chain since 8.0.1, listed once
 
 
 def test_health_reports_a_dead_provider(monkeypatch):

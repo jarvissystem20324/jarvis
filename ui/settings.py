@@ -32,7 +32,7 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "dash.cloudflare.com (right sidebar)", True),
     ("OPENROUTER_API_KEY", "OpenRouter", "openrouter.ai/keys", True),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "platform.openai.com/api-keys", False),
-    ("BLUEMINDS_API_KEY", "Blueminds  (relay, opt-in)",
+    ("BLUEMINDS_API_KEY", "Blueminds  (paid relay)",
      "api.bluesminds.com/console/token", False),
 )
 

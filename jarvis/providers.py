@@ -200,13 +200,23 @@ BLUEMINDS = Provider(
     # relay's own gateway (504), and two listed models answered 410 "reached
     # its end of life on 2026-08-26" — its catalogue is a month stale.
     # GLM-5 Turbo, reached through Blueminds' OpenRouter channel, is the
-    # user's choice for this key and the coding agent's default. Blueminds
-    # has not enabled it yet ("has not been priced by the administrator"),
-    # and refuses it instantly, so nothing waits on it in the meantime.
-    chat_model="openrouter/z-ai/glm-5-turbo",
+    # user's choice for the coding agent. Blueminds has not enabled it yet
+    # ("has not been priced by the administrator"), and refuses it
+    # instantly, so the agent falls straight through in the meantime.
+    #
+    # 2026-10-01, with $100 of credit on the account: the user asked for
+    # meta/llama-3.1-8b-instruct, which Blueminds retired on 2026-08-26 (410),
+    # as it did llama-3.3-70b, llama-3.1-70b and two Nemotrons. Of the 21
+    # listed, two answered: openai/gpt-oss-20b (1.3s) and
+    # meta/llama-3.2-11b-vision-instruct (0.5s, right, and it sees images) —
+    # the nearest working thing to what was asked for. gpt-5.5, kimi-k2.5,
+    # gemma-4-26b and gpt-oss-20b still time out; hy3 and mimo-v2.5 are 403
+    # ("no access to the free group"). Requests in parallel draw 429s.
+    chat_model="meta/llama-3.2-11b-vision-instruct",
+    vision=True,
     free=False,
     signup="https://api.bluesminds.com/console/token",
-    notes="Third-party relay. Runs the coding agent (GLM-5 Turbo) when enabled.",
+    notes="Paid relay. Llama 3.2 11B (sees images); runs the coding agent (GLM-5 Turbo) once enabled.",
 )
 
 # Every provider JARVIS knows how to talk to.
@@ -219,16 +229,18 @@ CHAT_PROVIDERS: tuple[Provider, ...] = (
 # leaving it in the chain would burn a request and confuse the error every
 # time. It still works for images, and `JARVIS_PROVIDER=pollinations` will
 # still pin it for anyone who wants it.
-# OpenRouter before OpenAI: free before paid, always.
+# OpenRouter before OpenAI: free before paid, always. Blueminds joined the
+# paid end in 8.0.1: with credit on the account and a model that answers in
+# half a second, the reason it was opt-in (90 seconds to fail) is gone.
 AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, OPENAI,
+    GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, BLUEMINDS, OPENAI,
 )
 
 # Known, keyed, but never tried unless asked for. A provider that takes 90
 # seconds to fail would add those 90 seconds to every failover, so an
 # unreliable one has to be promoted deliberately:
 #     JARVIS_EXTRA_PROVIDERS=blueminds
-OPT_IN_PROVIDERS: tuple[Provider, ...] = (BLUEMINDS,)
+OPT_IN_PROVIDERS: tuple[Provider, ...] = ()
 
 STT_PROVIDERS: tuple[Provider, ...] = (GROQ, MISTRAL, OPENAI)
 
