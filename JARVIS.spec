@@ -62,6 +62,16 @@ try:
     datas += collect_data_files("youtube_transcript_api")
 except Exception:
     pass
+# 8.0: PowerPoint (its default template is a data file), exact algebra,
+# YAML, file encryption, and pywin32's clipboard for the text expander.
+for pkg in ("pptx", "sympy", "yaml", "cryptography"):
+    try:
+        datas += collect_data_files(pkg)
+        hiddenimports += [pkg]
+    except Exception:
+        pass
+hiddenimports += ["sympy.parsing.sympy_parser", "cryptography.hazmat.primitives.ciphers.aead",
+                  "cryptography.hazmat.primitives.kdf.scrypt", "win32clipboard", "pypdf", "imaplib"]
 
 a = Analysis(
     ["app.py"],

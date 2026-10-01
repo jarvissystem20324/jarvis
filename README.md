@@ -1,4 +1,4 @@
-# JARVIS 7.1
+# JARVIS 8.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
 generation, voice, and an addon system.
@@ -40,13 +40,16 @@ python main.py
 | Capability | Free option | Needs a key? |
 | --- | --- | --- |
 | **Images** | FLUX.1-dev on NVIDIA, else Pollinations | Better with the NVIDIA key; works with none |
-| **Chat** | Gemini or Groq free tier | A free key |
+| **Chat** | Gemini, Groq, Mistral or Cloudflare free tier | A free key |
 | **Speech out** | Microsoft's neural voices; the Windows voice offline and in Privacy mode | No |
-| **Speech in** | Groq Whisper, or local faster-whisper | A free key, or nothing if local |
+| **Speech in** | Groq Whisper or Mistral Voxtral, or local faster-whisper | A free key, or nothing if local |
 
 Set `JARVIS_PROVIDER` to pin one backend, or leave it `auto` to try each in
-turn — Gemini, Groq, Inception, NVIDIA, OpenRouter, then OpenAI: free before
-paid, always. A key that gets rejected or runs out of credit is dropped for the
+turn — Gemini, Groq, Inception, NVIDIA, Mistral, Cloudflare Workers AI,
+OpenRouter, then OpenAI: free before paid, always. Mistral answers with
+Ministral 14B (it also sees images and transcribes speech); Cloudflare with
+GPT-OSS 120B and Llama 4 Scout for images, and needs `CLOUDFLARE_ACCOUNT_ID`
+beside its token. A key that gets rejected or runs out of credit is dropped for the
 session and the next provider takes over, so one dead key doesn't take the app
 down.
 
@@ -134,6 +137,33 @@ speak, let go, and the words are typed where your cursor is.
 `/data` never lets the model compute or run code. It sees column names and
 six sample rows, answers with a small query, and JARVIS runs that query
 itself — so a sum is a sum, not an estimate.
+
+## What's new in 8.0 — ninety-six more things
+
+Everything below also works in plain words ("flip a coin", "gold price", "add
+milk to my list", "is this link safe …"). `/help` lists every command.
+
+| Group | Highlights |
+| --- | --- |
+| **Make and write** | `/slides` PowerPoint decks with speaker notes · `/email` · `/cv` · `/coverletter` · `/dilekce` · `/cite` (DOIs straight from the publisher) · `/outline` · `/grammar <file>` · `/invoice` (exact totals) · `/meme` · `/mindmap` · `/flowchart` · `/post` · `/website` |
+| **Study** | `/homework` from a photo · `/solve` exact algebra and calculus (SymPy) · `/define` (TDK for Turkish) · `/synonyms` · `/wiki` · `/tutor spanish A2` · `/word` · `/cards review` spaced repetition · `/studyplan` · `/typing` · `/chapters <book>` |
+| **Everyday** | `/mylist` to-do list · `/every monday at 9 to …` repeating reminders · `/meds` · `/fridge` · `/mealplan` · `/workout` · `/sleepcalc` · `/split` · `/loan` · `/pack` · `/gift` · `/roll` `/pick` `/flip` · `/cal` with .ics export |
+| **Live info** | `/prayer` (Diyanet times, alerts) · `/quake` (EMSC, alerts) · `/gold` (gram altın) · `/crypto` · `/stock` (BIST and more) · `/holidays` · `/news <topic>` · `/air` · `/sun` · `/alert usd > 35` · `/pricewatch` · `/watchpage` |
+| **PC and files** | `/dupes` (to the Recycle Bin) · `/rename` with undo · `/imgs` · `/pdfmerge` `/pdfsplit` · `/fileconvert` · ✂ Snip and annotate · `/startup` · `/wifi` · `/darkmode` · `/wallpaper` (AI) · `/specs` · `/expand` text shortcuts (Ctrl+Alt+E) · `/screentime` · `/cleanup` · `/dnd` |
+| **Security** | `/passcheck` · `/pwned` (k-anonymity, the password never leaves) · `/checklink` · `/hash` · `/encrypt` `/decrypt` (AES-256) · `/shred` · `/camcheck` · `/2fa` codes · `/wifisafe` · `/procscan` |
+| **Coding** | `/json` `/yaml` · `/port 3000` · `/snippet` · `/readme` · `/docstrings` · `/translatecode` · `/py` · `/docker` · `/envcheck` · `/b64` `/jwt` `/uuid` |
+| **Voice, connections, fun** | 🎧 Hands-free conversation · `/persona coach` · `/whatsapp Ali: …` (you press Send) · `/inbox` email summary · `/gcal` · `/trivia` · `/20q` · `/watchlist` · `/funfact` |
+
+The window has an animated orb that shows when JARVIS is listening, thinking
+or speaking, a welcome tour (`/tour`), and six more interface languages:
+German, Spanish, French, Portuguese, Russian and Azerbaijani (`/lang de`).
+
+**Secrets stay out of the chat.** Passwords to check, 2FA setup keys, email app
+passwords and encryption passphrases are typed into a hidden box the window
+opens, go straight to the function that needs them, and are never shown,
+saved in the conversation, logged or sent to a model. Anything that changes
+Windows (dark mode, startup apps, notifications, the wallpaper) or deletes
+files asks first, and is undoable where Windows allows.
 
 ## Study, video, money and power (7.1)
 

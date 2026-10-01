@@ -32,10 +32,13 @@ EXPECTED: tuple[tuple[str, str, str], ...] = (
     ("GROQ_API_KEY", "", "Free, fastest, also does speech-to-text.\n# https://console.groq.com/keys"),
     ("INCEPTION_API_KEY", "", "Free, 100M tokens, ~1s replies. Powers Mid mode.\n# https://platform.inceptionlabs.ai"),
     ("NVIDIA_API_KEY", "", "Free. Also generates images (FLUX.1-dev).\n# https://build.nvidia.com"),
+    ("MISTRAL_API_KEY", "", "Free tier, ~1s replies, sees images, also does speech-to-text.\n# https://console.mistral.ai/api-keys"),
+    ("CLOUDFLARE_API_TOKEN", "", "Free daily allowance (Workers AI). Needs the account ID below too.\n# https://dash.cloudflare.com/profile/api-tokens"),
+    ("CLOUDFLARE_ACCOUNT_ID", "", "Your Cloudflare account ID (dashboard, right sidebar)."),
     ("OPENROUTER_API_KEY", "", "Free, 200 requests a day, no card. Routes to whichever free model\n# is up, so a retired model cannot break it. https://openrouter.ai/keys"),
-    ("JARVIS_PROVIDER", "auto", "auto | gemini | groq | inception | nvidia | openrouter | openai"),
+    ("JARVIS_PROVIDER", "auto", "auto | gemini | groq | inception | nvidia | mistral | cloudflare | openrouter | openai"),
     ("JARVIS_IMAGE_PROVIDER", "auto", "'auto' means free — an OpenAI key is not consent to bill it."),
-    ("JARVIS_STT_PROVIDER", "auto", "auto | groq | openai | local"),
+    ("JARVIS_STT_PROVIDER", "auto", "auto | groq | mistral | openai | local"),
     ("JARVIS_HOTKEY", "ctrl+alt+j", "Global shortcut to summon the window (Windows)."),
 )
 

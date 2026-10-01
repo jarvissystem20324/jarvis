@@ -226,7 +226,9 @@ class AddonManager:
             key = command.name.lstrip("/").lower()
             if not key:
                 continue
-            if key in RESERVED_COMMANDS:
+            from . import registry
+
+            if key in RESERVED_COMMANDS or key in registry.COMMANDS:
                 self.errors.append(
                     f"{path.name}: /{key} is a built-in command and cannot be "
                     f"overridden, skipped"

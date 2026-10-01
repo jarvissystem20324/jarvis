@@ -84,9 +84,29 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setattr(reminders, "get_data_dir", lambda: data)
     monkeypatch.setattr(reminders.board, "items", [])
     monkeypatch.setattr(reminders.board, "missed", [])
-    from jarvis import power, spending
+    from jarvis import applock, kit, power, quiz, spending, writer
+
+    # The lock test sets a PIN. Before 8.0 that PIN went into the real data
+    # folder for the rest of the run, so every later window opened locked —
+    # the quick-ask test was "flaky" because of it.
+    monkeypatch.setattr(applock, "get_data_dir", lambda: data)
+    # The same gap, found at the same time: these two also bound the real
+    # folder (the code index, /tidy's undo log).
+    from jarvis import index, tidy
+
+    for module in (index, tidy):
+        monkeypatch.setattr(module, "get_data_dir", lambda: data)
 
     monkeypatch.setattr(spending, "get_data_dir", lambda: data)
+    # 8.0 keeps every store through kit, and writes files through kit/writer/quiz.
+    monkeypatch.setattr(kit, "get_data_dir", lambda: data)
+    monkeypatch.setattr(kit, "get_output_dir", lambda: tmp_path / "output" / "images")
+    monkeypatch.setattr(writer, "get_output_dir", lambda: tmp_path / "output" / "images")
+    monkeypatch.setattr(quiz, "get_output_dir", lambda: tmp_path / "output" / "images")
+    monkeypatch.setenv("JARVIS_EXPAND_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_SCREENTIME", "off")
+    monkeypatch.setenv("JARVIS_TOUR", "off")
+    monkeypatch.delenv("JARVIS_QUIET", raising=False)
     monkeypatch.delenv("JARVIS_CURRENCY", raising=False)
     monkeypatch.delenv("JARVIS_BUDGET", raising=False)
     power._pending.clear()

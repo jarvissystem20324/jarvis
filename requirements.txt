@@ -21,6 +21,11 @@ qrcode>=8.0
 tzdata>=2025.1
 # 7.1: YouTube captions for /yt.
 youtube-transcript-api>=1.2.0
+# 8.0: slide decks, exact algebra, YAML tools, file encryption.
+python-pptx>=1.0.0
+sympy>=1.13
+pyyaml>=6.0
+cryptography>=43.0
 
 # Optional: fully offline speech-to-text, no key and no network.
 # pip install faster-whisper

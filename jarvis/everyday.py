@@ -17,6 +17,7 @@ from . import (
     data as data_mod, imagetools, intents, neural, notes, pc, redact, reminders,
     security, shield, weather, websearch, writer,
 )
+from . import registry
 from .config import get_setting
 
 LANGUAGES = {
@@ -105,7 +106,7 @@ class Everyday:
     def everyday_command(self, name: str, args: str, routed: bool = False):
         """Handle a 6.0 command. Returns text, a JarvisResponse, or None."""
         handlers = {
-            "help": lambda: HELP,
+            "help": lambda: HELP + registry.help_text(),
             "media": lambda: pc.media(args or "toggle"),
             "volume": lambda: self.volume(args),
             "app": lambda: self.open_app(args, routed),
@@ -146,6 +147,8 @@ class Everyday:
             result = self.extras_command(name, args, routed=may_fall_through)
         if result is None:
             result = self.toolkit_command(name, args, routed=may_fall_through)
+        if result is None:
+            result = self.eight_command(name, args, routed=may_fall_through)
         return result
 
     # --- media, apps, files, PC ------------------------------------------
@@ -317,11 +320,15 @@ class Everyday:
                     "       /makedoc revise: <change>   edit the last one\n"
                     "e.g. /makedoc a one-page cover letter for a junior developer job")
         revise = re.match(r"^(?:revise|edit|change)\s*:?\s*(.+)$", request, re.I | re.S)
-        if revise and getattr(self, "_last_document", ""):
-            answer = self.brain.ask_once(writer.REVISE.format(
-                request=revise.group(1), document=self._last_document))
-        else:
-            answer = self.brain.ask_once(f"{writer.PROMPT}\nThe user asked for: {request}")
+        from . import kit
+
+        # Mid mode's reply length (1,536 tokens) cut long documents short.
+        with kit.more_room(self.brain):
+            if revise and getattr(self, "_last_document", ""):
+                answer = self.brain.ask_once(writer.REVISE.format(
+                    request=revise.group(1), document=self._last_document))
+            else:
+                answer = self.brain.ask_once(f"{writer.PROMPT}\nThe user asked for: {request}")
         markdown = writer.clean_markdown(answer)
         if not markdown.startswith("#") and len(markdown) < 200:
             return f"No document came back:\n{answer[:400]}"

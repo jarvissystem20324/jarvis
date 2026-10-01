@@ -238,6 +238,47 @@ def selftest() -> int:
 
     check("YouTube summaries", _captions)
     check("spending", _spending)
+    # 8.0
+    def _slides() -> str:
+        from pathlib import Path
+        import tempfile
+
+        from jarvis import makers
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = makers.build_pptx({"title": "Self test", "slides": [{"title": "One", "bullets": ["a"], "notes": "n"}]},
+                                     Path(folder) / "t.pptx")
+            return f"PowerPoint {path.stat().st_size // 1024} KB"
+
+    def _algebra() -> str:
+        from jarvis import study
+
+        return ", ".join(study.solve_math("x^2 - 5x + 6 = 0").splitlines())
+
+    def _crypto() -> str:
+        from pathlib import Path
+        import tempfile
+
+        from jarvis import guard
+
+        with tempfile.TemporaryDirectory() as folder:
+            plain = Path(folder) / "p.txt"
+            plain.write_text("self test", encoding="utf-8")
+            locked = guard.encrypt_file(plain, "self-test-pass")
+            plain.unlink()
+            back = guard.decrypt_file(locked, "self-test-pass").read_text(encoding="utf-8")
+        return "AES-256-GCM round trip ok" if back == "self test" else "MISMATCH"
+
+    def _eight() -> str:
+        from jarvis import i18n, registry
+
+        __import__("yaml")
+        return f"{len(registry.COMMANDS)} commands, {len(i18n.available())} languages"
+
+    check("slides", _slides)
+    check("exact algebra", _algebra)
+    check("file encryption", _crypto)
+    check("8.0 commands", _eight)
     check("power controls", lambda: "shutdown.exe present" if __import__("shutil").which("shutdown") else "not on this platform")
 
     from jarvis import config as _cfg

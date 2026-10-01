@@ -50,6 +50,8 @@ class Reminder:
     due: float         # epoch seconds
     created: float
     fired: bool = False
+    repeat: str = ""   # "" | daily | weekly | weekdays | monthly | every:<seconds>   (8.0)
+    until: float = 0.0  # a repeating item stops after this moment; 0 = never
 
     def when(self) -> str:
         moment = datetime.fromtimestamp(self.due)
@@ -63,8 +65,52 @@ class Reminder:
         return f"{day} at {moment:%H:%M}"
 
     def line(self) -> str:
-        icon = {"timer": "⏱", "alarm": "⏰"}.get(self.kind, "🔔")
-        return f"  {self.id:>2}. {icon} {self.text or self.kind}  —  {self.when()}"
+        icon = {"timer": "⏱", "alarm": "⏰", "meds": "💊", "event": "📅", "task": "✅"}.get(self.kind, "🔔")
+        again = f"  ({describe_repeat(self.repeat)})" if self.repeat else ""
+        return f"  {self.id:>2}. {icon} {self.text or self.kind}  —  {self.when()}{again}"
+
+
+# Kinds that do their work when they fire (a price check, the next prayer
+# time). If one came due while JARVIS was closed it is simply run soon after
+# start, instead of being listed as a missed reminder.
+RESUME_KINDS = {"watch", "prayer", "word"}
+
+
+def describe_repeat(repeat: str) -> str:
+    if repeat.startswith("every:"):
+        seconds = int(float(repeat[6:]))
+        return f"every {describe_seconds(seconds)}"
+    return {"daily": "every day", "weekly": "every week", "weekdays": "every weekday",
+            "monthly": "every month"}.get(repeat, repeat)
+
+
+def next_due(due: float, repeat: str, now: float | None = None) -> float | None:
+    """The next occurrence after `now` of something that repeats."""
+    now = time.time() if now is None else now
+    if not repeat:
+        return None
+    moment = datetime.fromtimestamp(due)
+    for _ in range(10000):
+        if repeat == "daily":
+            moment += timedelta(days=1)
+        elif repeat == "weekly":
+            moment += timedelta(days=7)
+        elif repeat == "weekdays":
+            moment += timedelta(days=1)
+            while moment.weekday() >= 5:
+                moment += timedelta(days=1)
+        elif repeat == "monthly":
+            month = moment.month % 12 + 1
+            year = moment.year + (moment.month == 12)
+            day = min(moment.day, 28)
+            moment = moment.replace(year=year, month=month, day=day)
+        elif repeat.startswith("every:"):
+            moment += timedelta(seconds=max(60.0, float(repeat[6:])))
+        else:
+            return None
+        if moment.timestamp() > now:
+            return moment.timestamp()
+    return None
 
 
 # --- parsing ---------------------------------------------------------------
@@ -207,14 +253,26 @@ class Board:
                     id=int(raw["id"]), kind=str(raw.get("kind") or "reminder"),
                     text=str(raw.get("text") or ""), due=float(raw["due"]),
                     created=float(raw.get("created") or 0), fired=bool(raw.get("fired")),
+                    repeat=str(raw.get("repeat") or ""), until=float(raw.get("until") or 0),
                 ))
             except (KeyError, TypeError, ValueError):
                 continue
         now = time.time()
         # Due while JARVIS was closed: reported once, not fired late in a burst.
-        self.missed = [r for r in items if not r.fired and r.due < now - 60]
-        self.items = [r for r in items if not r.fired and r not in self.missed]
-        if self.missed:
+        late = [r for r in items if not r.fired and r.due < now - 60]
+        self.items = [r for r in items if not r.fired and r not in late]
+        self.missed = []
+        for r in late:
+            if r.kind in RESUME_KINDS:
+                r.due = now + 30
+                self.items.append(r)
+                continue
+            self.missed.append(r)
+            following = next_due(r.due, r.repeat, now)
+            if following and (not r.until or following <= r.until):
+                self.items.append(Reminder(r.id, r.kind, r.text, following, r.created, repeat=r.repeat, until=r.until))
+        self.items.sort(key=lambda r: r.due)
+        if late:
             self.save()
 
     def save(self) -> None:
@@ -223,10 +281,10 @@ class Board:
         except (OSError, TypeError, ValueError):
             pass
 
-    def add(self, kind: str, text: str, due: float) -> Reminder:
+    def add(self, kind: str, text: str, due: float, repeat: str = "", until: float = 0.0) -> Reminder:
         with self._lock:
             next_id = max((r.id for r in self.items), default=0) + 1
-            item = Reminder(next_id, kind, text.strip(), due, time.time())
+            item = Reminder(next_id, kind, text.strip(), due, time.time(), repeat=repeat, until=until)
             self.items.append(item)
             self.items.sort(key=lambda r: r.due)
         self.save()
@@ -277,6 +335,12 @@ class Board:
             with self._lock:
                 due = [r for r in self.items if r.due <= now]
                 self.items = [r for r in self.items if r.due > now]
+                for r in due:
+                    following = next_due(r.due, r.repeat, now)
+                    if following and (not r.until or following <= r.until):
+                        self.items.append(Reminder(r.id, r.kind, r.text, following, r.created,
+                                                   repeat=r.repeat, until=r.until))
+                self.items.sort(key=lambda r: r.due)
             if not due:
                 continue
             self.save()

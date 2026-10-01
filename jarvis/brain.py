@@ -91,6 +91,13 @@ class Brain:
         self.summary: str = ""
         # Standing instructions for this conversation only (/instructions).
         self.instructions: str = ""
+        # A persona chosen with /persona (8.0): a voice and role on top of
+        # JARVIS's identity, never instead of it.
+        self.persona: str = ""
+        # A floor under the mode's reply length, raised for the length of one
+        # call that must not be cut short (a deck as JSON, a whole CV). Mid's
+        # 1,536 tokens cut an 8-slide deck off mid-JSON.
+        self.min_tokens: int = 0
 
     # --- public ----------------------------------------------------------
 
@@ -125,6 +132,8 @@ class Brain:
         else:
             parts = [JARVIS_SYSTEM_PROMPT]
         parts.append(f"## Response mode: {self.mode.label}\n{self.mode.style}")
+        if self.persona and not self.persona_override:
+            parts.append(f"## Persona for this session\nStay JARVIS, but speak and act as follows:\n{self.persona}")
         if self.instructions:
             parts.append(
                 "## Standing instructions for this conversation\n"
@@ -541,7 +550,7 @@ class Brain:
         kwargs: dict = {
             "model": model,
             "messages": messages,
-            token_param: self.mode.max_tokens,
+            token_param: max(self.mode.max_tokens, self.min_tokens),
         }
         if provider.name not in self._no_temperature:
             kwargs["temperature"] = self.mode.temperature
@@ -595,7 +604,7 @@ class Brain:
         # The model spent its entire budget thinking. Nothing was emitted, so
         # asking again with more room is safe and is usually all it needs.
         roomier = dict(kwargs)
-        roomier[token_param] = max(self.mode.max_tokens * 3, 3072)
+        roomier[token_param] = max(self.mode.max_tokens * 3, 3072, self.min_tokens)
         try:
             return self._read_reply(
                 client.chat.completions.create(**roomier), on_chunk

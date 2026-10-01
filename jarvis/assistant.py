@@ -17,6 +17,8 @@ from .brain import Brain
 from .everyday import HELP, Everyday
 from .extras import Extras
 from .toolkit import Toolkit
+from .eight import Eight
+from . import registry
 from .config import voice_enabled_by_default
 from .images import DEFAULT_QUALITY, ImageGenerationError, ImageGenerator
 from .voice import Voice
@@ -32,7 +34,7 @@ class JarvisResponse:
     image_paths: list[Path] = field(default_factory=list)
 
 
-class Jarvis(Everyday, Extras, Toolkit):
+class Jarvis(Everyday, Extras, Toolkit, Eight):
     def __init__(self, voice_enabled: bool | None = None):
         # Files written by earlier versions are plain JSON; seal them now so
         # encryption covers what is already on disk, not only what is new.
@@ -292,7 +294,7 @@ class Jarvis(Everyday, Extras, Toolkit):
             if name == "help":
                 lines = self.addons.help_lines()
                 extra = ("\n\nFrom addons:\n" + "\n".join(lines)) if lines else ""
-                return JarvisResponse(text=HELP + extra)
+                return JarvisResponse(text=HELP + registry.help_text() + extra)
 
             # /read <url> reads a web page; plain /read still reads the screen.
             if name == "read" and args.strip().lower().startswith(("http://", "https://")):
@@ -304,6 +306,8 @@ class Jarvis(Everyday, Extras, Toolkit):
                 everyday = self.extras_command(name, args)
             if everyday is None:
                 everyday = self.toolkit_command(name, args)
+            if everyday is None:
+                everyday = self.eight_command(name, args)
             if everyday is not None:
                 if isinstance(everyday, JarvisResponse):
                     return everyday
@@ -330,6 +334,9 @@ class Jarvis(Everyday, Extras, Toolkit):
         # A running quiz takes plain messages as answers; commands still work.
         if getattr(self, "_quiz", None) is not None:
             return JarvisResponse(text=self.quiz_reply(text))
+        # So do flashcard reviews, the typing test and twenty questions (8.0).
+        if getattr(self, "_intercept", None) is not None:
+            return JarvisResponse(text=self._intercept(text))
 
         # Live translation takes every line while it is on.
         if self._translate_to:

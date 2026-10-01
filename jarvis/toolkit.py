@@ -93,8 +93,11 @@ class Toolkit:
                     "       /quiz                on the open document or YouTube video\n"
                     "Answer A-D · 'skip' · 'stop'. /flashcards <topic|file> makes Anki cards.")
         topic = label or text
-        answer = self.brain.ask_once(quiz_mod.QUIZ_PROMPT.format(
-            count=count, about=self._about(label, material, text), level=""))
+        from . import kit
+
+        with kit.more_room(self.brain):
+            answer = self.brain.ask_once(quiz_mod.QUIZ_PROMPT.format(
+                count=count, about=self._about(label, material, text), level=""))
         try:
             questions = quiz_mod.questions_from(answer)
         except quiz_mod.QuizError as exc:
@@ -136,13 +139,19 @@ class Toolkit:
                 return "Usage: /flashcards <topic or file>   e.g. /flashcards 30 Spanish food words"
             text = last.topic
         topic = label or text
-        answer = self.brain.ask_once(quiz_mod.CARDS_PROMPT.format(
-            count=count, about=self._about(label, material, text)))
+        from . import kit
+
+        with kit.more_room(self.brain):
+            answer = self.brain.ask_once(quiz_mod.CARDS_PROMPT.format(
+                count=count, about=self._about(label, material, text)))
         try:
             cards = quiz_mod.cards_from(answer)
         except quiz_mod.QuizError as exc:
             return str(exc)
         path = quiz_mod.save_cards(cards, topic)
+        from .study import add_cards
+
+        add_cards(topic, cards)
         security.audit.record("flashcards", topic[:80], f"{len(cards)} cards")
         preview = "\n".join(f"  • {front} — {back}" for front, back in cards[:8])
         more = f"\n  … and {len(cards) - 8} more" if len(cards) > 8 else ""

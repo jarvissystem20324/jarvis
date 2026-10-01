@@ -87,10 +87,14 @@ NETWORK = Capability(
     "network", "Fetch something over the network",
     "JARVIS will download from the address shown.",
 )
+CHANGE_SETTING = Capability(
+    "change_setting", "Change a Windows setting",
+    "Only the setting shown changes, and the same command switches it back.",
+)
 
 ALL_CAPABILITIES = (
     RUN_COMMAND, WRITE_FILE, DELETE_FILE, READ_SCREEN,
-    READ_FILE, SEND_CODE, RUN_TESTS, NETWORK, RUN_AGENT,
+    READ_FILE, SEND_CODE, RUN_TESTS, NETWORK, RUN_AGENT, CHANGE_SETTING,
 )
 BY_NAME = {c.name: c for c in ALL_CAPABILITIES}
 

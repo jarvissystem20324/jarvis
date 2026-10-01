@@ -8,6 +8,8 @@ that was written, tested on its own, and never actually called by the chat.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 
@@ -332,3 +334,73 @@ def test_a_notification_never_breaks_anything(app):
 
     notify.flash(app)                      # must not raise, whatever the OS
     assert notify._ps_quote("it's") == "'it''s'"
+
+
+# --- 8.0 ----------------------------------------------------------------------------------
+
+@pytest.fixture
+def inline_workers(monkeypatch):
+    """Run the window's worker threads on the spot. Without a mainloop, a
+    worker's after() back onto the Tk thread is dropped, so results would
+    never arrive in a test (in the real app the mainloop is running)."""
+    from ui import app as ui_app, eightui
+
+    class Now:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(eightui.threading, "Thread", Now)
+    monkeypatch.setattr(ui_app, "safe_after", lambda widget, callback: callback())
+
+
+def test_a_password_never_reaches_the_chat(app, monkeypatch, inline_workers):
+    from jarvis import guard
+
+    checked = []
+    monkeypatch.setattr(guard, "pwned_count", lambda password: (checked.append(password), 0)[1])
+    app.chat_input.insert(0, "/pwned hunter2")
+    app._send_chat()
+    deadline = time.time() + 5
+    while not checked and time.time() < deadline:
+        app.update()
+        time.sleep(0.05)
+    for _ in range(20):
+        app.update()
+        time.sleep(0.02)
+    assert checked == ["hunter2"]
+    shown = _text(app)
+    assert "hunter2" not in shown and "/pwned ••••••••" in shown and "Not found" in shown
+    assert "hunter2" not in str(app.jarvis.brain.history)
+
+
+def test_a_secret_is_asked_for_in_a_hidden_box(app, monkeypatch, inline_workers):
+    from jarvis import guard
+
+    monkeypatch.setattr(guard, "pwned_count", lambda password: 3)
+    app.chat_input.insert(0, "was my password leaked")
+    app._send_chat()
+    app.update()
+    dialog, entry, done = app._last_secret_dialog
+    assert entry.cget("show") == "•"
+    entry.insert(0, "letmein")
+    done()
+    for _ in range(60):
+        app.update()
+        time.sleep(0.03)
+        if "appears 3 times" in _text(app):
+            break
+    assert "appears 3 times" in _text(app) and "letmein" not in _text(app)
+
+
+def test_the_avatar_and_ui_commands(app):
+    app._avatar_tick()
+    app.update()
+    assert app._avatar.find_all()
+    assert "Hands-free" in app._ui_command("/handsfree off")
+    assert app._ui_command("/tour") == "Here's the tour."
+    app._tour(force=True)
+    app.update()
+    app._tour_window.destroy()

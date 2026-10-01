@@ -68,6 +68,9 @@ PROVIDER_FIELDS = (
     # tier always fell straight through to the chain.
     ("INCEPTION_API_KEY", "Inception  (free)", "sk_..."),
     ("NVIDIA_API_KEY", "NVIDIA NIM  (free)", "nvapi-..."),
+    ("MISTRAL_API_KEY", "Mistral  (free)", "from console.mistral.ai"),
+    ("CLOUDFLARE_API_TOKEN", "Cloudflare Workers AI  (free)", "cfat_... or a 40-character token"),
+    ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "32 hex characters"),
     ("OPENROUTER_API_KEY", "OpenRouter  (free)", "sk-or-..."),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "sk-..."),
 )

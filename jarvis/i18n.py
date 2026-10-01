@@ -1,4 +1,4 @@
-"""Turkish and English for the interface itself.
+"""The interface in eight languages (English, Turkish and, from 8.0, six more).
 
 JARVIS has always *answered* in Turkish — the model does that on its own. The
 buttons, the labels and the error messages were English regardless, which is
@@ -110,6 +110,11 @@ ANSWER_IN = {
         "yazmadıkça Türkçe yanıt ver."
     ),
 }
+
+# 8.0: German, Spanish, French, Portuguese, Russian and Azerbaijani.
+from .i18n_more import merge as _merge  # noqa: E402
+
+_merge(LANGUAGES, STRINGS, ANSWER_IN)
 
 _current = ENGLISH
 

@@ -27,6 +27,9 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("GROQ_API_KEY", "Groq", "console.groq.com/keys", True),
     ("INCEPTION_API_KEY", "Inception Mercury", "platform.inceptionlabs.ai", True),
     ("NVIDIA_API_KEY", "NVIDIA NIM", "build.nvidia.com", True),
+    ("MISTRAL_API_KEY", "Mistral", "console.mistral.ai/api-keys", True),
+    ("CLOUDFLARE_API_TOKEN", "Cloudflare Workers AI", "dash.cloudflare.com/profile/api-tokens", True),
+    ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "dash.cloudflare.com (right sidebar)", True),
     ("OPENROUTER_API_KEY", "OpenRouter", "openrouter.ai/keys", True),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "platform.openai.com/api-keys", False),
     ("BLUEMINDS_API_KEY", "Blueminds  (relay, opt-in)",
@@ -335,11 +338,16 @@ class SettingsWindow(ctk.CTkToplevel):
         label.configure(text="testing…", text_color=self.colors["muted"])
 
         provider = next(
-            (p for p in providers.CHAT_PROVIDERS if p.key_env == env_name), None
+            (p for p in providers.CHAT_PROVIDERS if p.key_env == env_name or env_name in p.needs_env), None
         )
         if provider is None:
             label.configure(text="unknown provider", text_color=self.colors["error"])
             return
+        # A setting such as Cloudflare's account ID is tested with the
+        # provider's key from its own box, and the ID filling in the URL.
+        api_key = key
+        if env_name != provider.key_env:
+            api_key = (self.entries[provider.key_env].get().strip() if provider.key_env in self.entries else "")                 or providers.key_for(provider)
 
         def work():
             import os
@@ -348,7 +356,7 @@ class SettingsWindow(ctk.CTkToplevel):
             previous = os.environ.get(env_name)
             os.environ[env_name] = key
             try:
-                client = OpenAI(api_key=key, base_url=provider.base_url,
+                client = OpenAI(api_key=api_key, base_url=providers.base_url_for(provider),
                                 timeout=45, max_retries=0)
                 reply = client.chat.completions.create(
                     model=providers.model_for(provider), max_tokens=256,

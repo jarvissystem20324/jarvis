@@ -22,6 +22,7 @@ from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
 from jarvis import applock, i18n, intents, reminders, schedule, updater
 from ui import notify, render, theme
+from ui.eightui import FIRE_KINDS, EightUI
 
 ctk.set_default_color_theme("blue")
 
@@ -67,7 +68,7 @@ def _make_placeholder_logo(size: int = 96) -> Image.Image:
     return image
 
 
-class JarvisApp(ctk.CTk):
+class JarvisApp(EightUI, ctk.CTk):
     def __init__(self):
         super().__init__()
 
@@ -139,6 +140,7 @@ class JarvisApp(ctk.CTk):
         schedule.scheduler.start(self._run_scheduled)
         reminders.board.start(self._reminder_fired)
         self.after(1500, self._report_missed)
+        self._eight_init()
 
         updater.cleanup_previous_update()
         # Quietly look for a new version a moment after the window settles.
@@ -161,7 +163,8 @@ class JarvisApp(ctk.CTk):
         header.pack(fill="x", padx=16, pady=(24, 8))
 
         self.logo_image = ctk.CTkImage(_make_placeholder_logo(64), size=(48, 48))
-        ctk.CTkLabel(header, image=self.logo_image, text="").pack(side="left", padx=(0, 10))
+        # 8.0: an animated orb (idle, listening, thinking, speaking) instead of the still logo.
+        self._avatar_build(header)
 
         title_box = ctk.CTkFrame(header, fg_color="transparent")
         title_box.pack(side="left")
@@ -419,6 +422,7 @@ class JarvisApp(ctk.CTk):
             ("↧ Export", lambda: self._run_text("/export")),
             ("⌨ Shortcuts", lambda: self._quick(self._ui_command("/keys") or "")),
             ("📎 Attach", self._choose_file),
+            ("✂ Snip", lambda: self._run_text("/snip")),
         ):
             ctk.CTkButton(
                 quick, text=label, height=26, width=0,
@@ -426,6 +430,12 @@ class JarvisApp(ctk.CTk):
                 fg_color="transparent", hover_color=COLORS["accent_dim"],
                 text_color=COLORS["muted"], command=command,
             ).pack(side="left", padx=(0, 6))
+        self._handsfree_button = ctk.CTkButton(
+            quick, text="🎧 Hands-free", height=26, width=0, font=ctk.CTkFont(size=11),
+            fg_color="transparent", hover_color=COLORS["accent_dim"], text_color=COLORS["muted"],
+            command=lambda: self._quick(self._set_handsfree(not self._handsfree_on)),
+        )
+        self._handsfree_button.pack(side="left", padx=(0, 6))
 
     # --- conversation list ------------------------------------------------
 
@@ -561,6 +571,11 @@ class JarvisApp(ctk.CTk):
 
     def _reminder_fired(self, item) -> None:
         """Called on the reminder thread when something comes due."""
+        if item.kind in FIRE_KINDS:
+            # A price watch, the next prayer time: work first, and only a
+            # result worth telling makes a sound.
+            self._fire_eight(item)
+            return
         safe_after(self, lambda: self._show_reminder(item))
         threading.Thread(target=reminders.ring, args=(item.kind,), daemon=True).start()
 
@@ -586,10 +601,13 @@ class JarvisApp(ctk.CTk):
             power._pending.clear()
             self.after(3000, self.jarvis._sleep_safely)
             return
-        icon = {"timer": "⏱", "alarm": "⏰"}.get(item.kind, "🔔")
-        title = {"timer": "Timer done", "alarm": "Alarm"}.get(item.kind, "Reminder")
+        icon = {"timer": "⏱", "alarm": "⏰", "meds": "💊", "task": "✅", "event": "📅"}.get(item.kind, "🔔")
+        title = {"timer": "Timer done", "alarm": "Alarm", "meds": "Medicine", "task": "To do",
+                 "event": "Coming up"}.get(item.kind, "Reminder")
         text = item.text or title
         self._append_message("JARVIS", f"{icon} {title}: {text}", is_user=False, record=False)
+        if os.environ.get("JARVIS_QUIET"):
+            return          # do not disturb: shown here, no banner, no voice
         notify.flash(self)
         notify.toast(f"JARVIS — {title}", text)
         if self.jarvis.voice_enabled:
@@ -1723,7 +1741,7 @@ class JarvisApp(ctk.CTk):
             return "Keyboard shortcuts:\n" + "\n".join(
                 f"  {key:<16} {what}" for key, what in self.SHORTCUTS
             )
-        return None
+        return self._eight_ui_command(name, args)
 
     def _prompt_find(self) -> None:
         self.chat_input.delete(0, "end")
@@ -1995,7 +2013,18 @@ class JarvisApp(ctk.CTk):
         if not text:
             return
         self.chat_input.delete(0, "end")
-        self._append_message("You", text, is_user=True)
+        # 8.0: a password to check, a 2FA secret, an app password: asked for
+        # in a hidden box and handed straight to the function, never kept in
+        # the chat, the history or a prompt.
+        routed_secret = intents.route(text) if not text.startswith("/") else None
+        if routed_secret and routed_secret[0] in {"/passcheck", "/pwned"}:
+            text = routed_secret[0]
+        secret = self.jarvis.secret_request(text)
+        self._append_message("You", self.jarvis.mask(text), is_user=True, record=secret is None)
+        if secret is not None:
+            self._last_input = ""
+            self._secret_flow(*secret)
+            return
 
         # /find, /copy and /keys act on this window, so they are answered
         # here rather than sent to a provider.
@@ -2007,7 +2036,7 @@ class JarvisApp(ctk.CTk):
         # Plain words for things only the window can do ("copy text from the
         # screen", "generate a password", "lock") become their command.
         routed = intents.route(text) if not text.startswith("/") else None
-        if routed and routed[0].split()[0] in {"/ocr", "/password", "/lock"}:
+        if routed and routed[0].split()[0] in {"/ocr", "/password", "/lock", "/snip", "/handsfree", "/tour"}:
             text = routed[0]
         # /clip works on whatever is on the clipboard; only the window can read it.
         if text.lower().startswith("/clip"):
@@ -2332,6 +2361,7 @@ class JarvisApp(ctk.CTk):
         UpdateDialog(self, info, downloaded=path)
 
     def _on_close(self) -> None:
+        self._eight_close()
         try:
             self.jarvis.save_history()
         except Exception:

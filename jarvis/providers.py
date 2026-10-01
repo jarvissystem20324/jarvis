@@ -43,6 +43,9 @@ class Provider:
     vision: bool = False
     # A separate model for images, when the chat model cannot see.
     vision_model: str | None = None
+    # Other settings the provider needs besides its key. Their values fill
+    # {NAME} placeholders in base_url (Cloudflare puts the account in the URL).
+    needs_env: tuple[str, ...] = ()
 
 
 # --- chat -----------------------------------------------------------------
@@ -124,6 +127,41 @@ NVIDIA = Provider(
     notes="Free tier, fast. Most other NIM models time out.",
 )
 
+MISTRAL = Provider(
+    name="mistral",
+    label="Mistral",
+    base_url="https://api.mistral.ai/v1",
+    key_env="MISTRAL_API_KEY",
+    # Measured on 2026-10-01 with the user's free-tier key: Ministral 14B
+    # answered chat and an image in 1.1s each, while mistral-medium and
+    # mistral-small answered 429 to every request, even spaced 15s apart.
+    # JARVIS_MISTRAL_MODEL=mistral-medium-latest once the plan allows it.
+    chat_model="ministral-14b-latest",
+    stt_model="voxtral-mini-latest",
+    vision=True,
+    free=True,
+    signup="https://console.mistral.ai/api-keys",
+    notes="Free tier, ~1s replies, sees images, also does speech-to-text.",
+)
+
+CLOUDFLARE = Provider(
+    name="cloudflare",
+    label="Cloudflare Workers AI",
+    base_url="https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    key_env="CLOUDFLARE_API_TOKEN",
+    needs_env=("CLOUDFLARE_ACCOUNT_ID",),
+    # Measured on 2026-10-01 on the free Workers AI plan: gpt-oss-120b 1.3s
+    # and right, llama-3.3-70b-fp8-fast 0.4s, qwen3.8-27b 1.1s; DeepSeek V4,
+    # GLM 5.3 and Kimi K2.6 are listed but refused ("not available") without
+    # the paid plan. Llama 4 Scout read a test image in 0.2s. The free plan
+    # is 10,000 "neurons" a day, a few hundred replies.
+    chat_model="@cf/openai/gpt-oss-120b",
+    vision_model="@cf/meta/llama-4-scout-17b-16e-instruct",
+    free=True,
+    signup="https://dash.cloudflare.com/profile/api-tokens",
+    notes="Free daily allowance. GPT-OSS 120B; Llama 4 Scout for images. Needs the account ID too.",
+)
+
 POLLINATIONS = Provider(
     name="pollinations",
     label="Pollinations",
@@ -173,7 +211,7 @@ BLUEMINDS = Provider(
 
 # Every provider JARVIS knows how to talk to.
 CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS,
+    GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS,
 )
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
@@ -183,7 +221,7 @@ CHAT_PROVIDERS: tuple[Provider, ...] = (
 # still pin it for anyone who wants it.
 # OpenRouter before OpenAI: free before paid, always.
 AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, OPENROUTER, OPENAI,
+    GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, OPENAI,
 )
 
 # Known, keyed, but never tried unless asked for. A provider that takes 90
@@ -192,7 +230,7 @@ AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
 #     JARVIS_EXTRA_PROVIDERS=blueminds
 OPT_IN_PROVIDERS: tuple[Provider, ...] = (BLUEMINDS,)
 
-STT_PROVIDERS: tuple[Provider, ...] = (GROQ, OPENAI)
+STT_PROVIDERS: tuple[Provider, ...] = (GROQ, MISTRAL, OPENAI)
 
 BY_NAME = {p.name: p for p in CHAT_PROVIDERS}
 
@@ -212,7 +250,20 @@ def has_key(provider: Provider) -> bool:
     load_config()
     import os
 
-    return bool(os.getenv(provider.key_env, "").strip())
+    return all(os.getenv(name, "").strip() for name in (provider.key_env, *provider.needs_env))
+
+
+def base_url_for(provider: Provider) -> str | None:
+    """The provider's URL with any {SETTING} placeholders filled in."""
+    if not provider.base_url or "{" not in provider.base_url:
+        return provider.base_url
+    import os
+
+    load_config()
+    url = provider.base_url
+    for name in provider.needs_env:
+        url = url.replace("{" + name + "}", os.getenv(name, "").strip())
+    return url
 
 
 def key_for(provider: Provider) -> str:
@@ -310,7 +361,7 @@ def get_client(provider: Provider) -> OpenAI:
                 "max_retries": 1 if provider.key_env is None else 2,
             }
             if provider.base_url:
-                kwargs["base_url"] = provider.base_url
+                kwargs["base_url"] = base_url_for(provider)
             if provider.name == "pollinations":
                 kwargs["default_headers"] = {"Referer": REFERRER}
             _clients[provider.name] = OpenAI(**kwargs)
