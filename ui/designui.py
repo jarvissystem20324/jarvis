@@ -1231,7 +1231,20 @@ class DesignPage(ctk.CTkFrame):
         box.tag_add("sel", "1.0", "end-1c")
         box.bind("<Escape>", lambda e: (self._commit_editor(cancel=True), "break")[1])
         box.bind("<Control-Return>", lambda e: (self._commit_editor(), "break")[1])
-        box.bind("<FocusOut>", lambda e: self.after(10, self._commit_editor))
+        box.bind("<FocusOut>", lambda e: self.after(10, self._focus_left))
+
+    def _focus_left(self) -> None:
+        """The editor lost focus: finish if you moved to something else in the
+        window, but keep typing if the whole window lost it (Alt+Tab away)."""
+        if not self._editor:
+            return
+        try:
+            now = self.focus_get()
+        except (KeyError, tkinter.TclError):
+            now = None
+        if now is None or now is self._editor[0]:
+            return
+        self._commit_editor()
 
     def _commit_editor(self, cancel: bool = False) -> None:
         if not self._editor:

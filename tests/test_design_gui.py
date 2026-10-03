@@ -157,6 +157,19 @@ def test_double_click_edits_text_in_place(page):
     assert model.find(page.page, el["id"])["text"] == "Your title"
 
 
+def test_the_text_editor_survives_alt_tab(page, monkeypatch):
+    el = page.add_text("body")
+    page.edit_text()
+    box = page._editor[0]
+    box.insert("end", " more")
+    monkeypatch.setattr(page, "focus_get", lambda: None)          # the whole window lost focus
+    page._focus_left()
+    assert page._editor is not None
+    monkeypatch.setattr(page, "focus_get", lambda: page.notes_box)  # moved to another part of JARVIS
+    page._focus_left()
+    assert page._editor is None and el["text"].endswith(" more")
+
+
 def test_style_panel_changes_the_selection(page):
     el = page.add_shape("star")
     page._set("fill", "#ff0000")
