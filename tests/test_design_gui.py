@@ -7,6 +7,7 @@ through the same handlers a person's clicks do.
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -105,29 +106,42 @@ def test_add_select_drag_resize_rotate_and_undo(page):
     assert model.find(page.page, el["id"])["x"] == pytest.approx(start[0] + 200, abs=3)
 
 
+def press(page, sequence: str) -> None:
+    """A shortcut, run through the canvas's own binding for it.
+
+    Tk sends generated key events to whichever window holds the OS keyboard
+    focus, and on a CI runner that is never this one — so the binding's
+    script is evaluated directly, with its %-fields filled in."""
+    script = page.canvas.bind(sequence)
+    assert script, f"{sequence} isn't bound on the canvas"
+    filled = re.sub(r"%[#bfhkstwxyAEKNWTXYD]", lambda m: str(page.canvas) if m.group() == "%W" else "0", script)
+    page.canvas.tk.eval("catch {" + filled + "}")
+    page.update()
+
+
 def test_keyboard_shortcuts(page):
     el = page.add_text("body")
     assert page.canvas.focus_lastfor() is page.canvas   # selecting gives the canvas the keyboard
-    page.canvas.focus_force()
-    page.update()
-    x0 = el["x"]
-    page.canvas.event_generate("<Right>")
-    page.canvas.event_generate("<Shift-Down>")
-    page.update()
-    assert el["x"] == x0 + 2 and el["y"] > 0
+    x0, y0 = el["x"], el["y"]
+    press(page, "<Key-Right>")
+    press(page, "<Shift-Key-Down>")
+    assert el["x"] == x0 + 2 and el["y"] == y0 + 20
     count = len(page.page["elements"])
-    page.canvas.event_generate("<Control-d>")
-    page.update()
+    press(page, "<Control-Key-d>")
     assert len(page.page["elements"]) == count + 1
-    page.copy_element()
-    page.canvas.event_generate("<Delete>")
-    page.update()
+    press(page, "<Control-Key-c>")
+    press(page, "<Key-Delete>")
     assert len(page.page["elements"]) == count
     page.paste_element()
     assert len(page.page["elements"]) == count + 1
-    page.canvas.event_generate("<Control-z>")
-    page.update()
+    press(page, "<Control-Key-z>")
     assert len(page.page["elements"]) == count
+    press(page, "<Control-Key-y>")
+    assert len(page.page["elements"]) == count + 1
+    press(page, "<Key-Escape>")
+    assert page.selected_id is None
+    for sequence in ("<Control-Key-s>", "<Control-Key-l>", "<Key-F2>", "<Key-Prior>", "<Control-Key-0>"):
+        assert page.canvas.bind(sequence), sequence
 
 
 def test_double_click_edits_text_in_place(page):
