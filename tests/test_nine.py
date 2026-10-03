@@ -567,6 +567,12 @@ def test_mcp_setup_asks_first(base, jarvis, deny, monkeypatch, tmp_path):
     assert not (tmp_path / "home2").exists()
 
 
+def test_font_pairs_without_the_windows_fonts(monkeypatch):
+    monkeypatch.setattr(fonts, "has", lambda family: False)
+    pairs = dai.font_suggestions(None, "", 3)
+    assert len(pairs) == 3 and all(len(p) == 3 for p in pairs)
+
+
 def test_fonts_are_found_by_family():
     families = fonts.families()
     assert families

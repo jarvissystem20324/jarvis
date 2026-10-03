@@ -642,9 +642,9 @@ def apply_fonts(design: dict, heading: str, body: str) -> int:
 
 
 def font_suggestions(brain, mood: str, count: int = 4) -> list[tuple[str, str, str]]:
-    pairs = templates.font_pairs(mood)
-    if not pairs:
-        return []
+    # A PC without the usual Windows fonts still gets the pairs; rendering
+    # falls back to the nearest family it has, so they never break a design.
+    pairs = templates.font_pairs(mood) or templates.font_pairs(mood, installed_only=False)
     words = [w for w in mood.lower().split() if len(w) > 2]
     if words and not any(w in pairs[0][2] for w in words) and brain is not None:
         listing = "\n".join(f"{i}: {h} + {b} ({v})" for i, (h, b, v) in enumerate(pairs))

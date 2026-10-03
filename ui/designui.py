@@ -1010,6 +1010,13 @@ class DesignPage(ctk.CTkFrame):
                     self.side.set("Style")
                 except Exception:
                     pass
+        if element_id is not None:
+            # The keyboard follows the selection, so Delete, Ctrl+D and the arrows
+            # work straight after inserting from the side panel.
+            try:
+                self.canvas.focus_set()
+            except tkinter.TclError:
+                pass
         self.redraw_overlay()
 
     def _place(self, el: dict, at: tuple[float, float] | None = None) -> dict:

@@ -107,7 +107,9 @@ def test_add_select_drag_resize_rotate_and_undo(page):
 
 def test_keyboard_shortcuts(page):
     el = page.add_text("body")
+    assert page.canvas.focus_lastfor() is page.canvas   # selecting gives the canvas the keyboard
     page.canvas.focus_force()
+    page.update()
     x0 = el["x"]
     page.canvas.event_generate("<Right>")
     page.canvas.event_generate("<Shift-Down>")

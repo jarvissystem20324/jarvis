@@ -1260,6 +1260,7 @@ class JarvisApp(EightUI, ctk.CTk):
             page = self.design_page()
             page.grid(row=0, column=0, sticky="nsew")
             page.after(30, page.redraw)
+            page.after(60, page.canvas.focus_set)
             return
         else:
             self.chat_frame.grid(row=0, column=0, sticky="nsew")
