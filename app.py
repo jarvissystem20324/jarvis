@@ -275,7 +275,33 @@ def selftest() -> int:
         __import__("yaml")
         return f"{len(registry.COMMANDS)} commands, {len(i18n.available())} languages"
 
+    # 9.0
+    def _design() -> str:
+        from pathlib import Path
+        import tempfile
+
+        from jarvis.design import fonts, pptxio, render, templates
+
+        items = templates.catalogue()
+        for item in items[::6]:
+            render.thumbnail(item["make"](), 96)
+        deck = templates.build_deck({"title": "Self test", "slides": [{"title": "One", "bullets": ["a"], "notes": "n"}]})
+        with tempfile.TemporaryDirectory() as folder:
+            back = pptxio.import_pptx(pptxio.export_pptx(deck, Path(folder) / "d.pptx"))
+            render.export_pdf(deck, Path(folder) / "d.pdf")
+        if len(back["pages"]) != 2:
+            raise RuntimeError("PowerPoint round trip lost slides")
+        return f"{len(items)} templates, PowerPoint round trip ok, {len(fonts.families())} font families"
+
+    def _mcp() -> str:
+        from jarvis import mcp_server
+
+        reply = mcp_server.Server(jarvis=object()).handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        return f"{len(reply['result']['tools'])} tools"
+
     check("slides", _slides)
+    check("design page", _design)
+    check("MCP server", _mcp)
     check("exact algebra", _algebra)
     check("file encryption", _crypto)
     check("8.0 commands", _eight)
@@ -305,6 +331,14 @@ def _count_devices(output: bool) -> int:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
+    if "--mcp" in sys.argv:
+        # 9.0: an MCP server for Antigravity, Claude Code and Cursor. No window.
+        from jarvis.config import load_config
+
+        load_config()
+        from jarvis import mcp_server
+
+        return mcp_server.main()
 
     try:
         from jarvis.config import load_config

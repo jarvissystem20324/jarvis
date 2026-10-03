@@ -1,7 +1,7 @@
-# JARVIS 8.0
+# JARVIS 9.0
 
 Just A Rather Very Intelligent System — a desktop AI assistant with chat, image
-generation, voice, and an addon system.
+generation, a design page, voice, and an addon system.
 
 **Runs without paying for anything.** Images generate with no account at all.
 Chat and speech-to-text need one free API key — a free account, no card.
@@ -137,6 +137,68 @@ speak, let go, and the words are typed where your cursor is.
 `/data` never lets the model compute or run code. It sees column names and
 six sample rows, answers with a small query, and JARVIS runs that query
 itself — so a sum is a sum, not an estimate.
+
+## What's new in 9.0 — the Design page
+
+**🖌 Design** in the sidebar is a design editor for slides, YouTube
+thumbnails, posters and flyers, logos, greeting cards, restaurant menus,
+wedding invitations, stickers, sale posters and diagrams.
+
+- **Edit by hand.** Click to select, drag to move, square handles resize
+  (Shift keeps proportions), the round handle rotates, double-click edits
+  text in place, right-click for more. Ctrl+wheel zooms, middle-drag pans.
+  Everything is undoable (Ctrl+Z). ⌨ lists the shortcuts.
+- **Or ask.** AI → *Ask JARVIS to change it*: “make the title bigger and
+  dark blue”, “add a subtitle”. Simple edits happen instantly with no model;
+  harder ones are planned by the model and checked before they apply. ◉ Say
+  it does the same by voice.
+- **Describe it, JARVIS designs it.** “a poster for a charity run on 12
+  October in Moda” → a finished, editable design. The model writes the words;
+  the layout comes from templates, so it is tidy whichever model answered.
+- **Insert:** text, 15 shapes, lines and arrows, tables, pictures from a file
+  or made by JARVIS, and 140+ icons. **Style:** any installed font (shown in
+  its own face), colour picker, eyedropper, opacity, rotation, outlines,
+  shadows, picture crop/filters/flip/rounded/circle, copy and paste style,
+  lock.
+- **Slides:** 12 themes, a page strip you drag to reorder, speaker notes
+  written by AI, an AI picture for a slide, a deck from a YouTube video, quiz
+  slides for class (a question, then its answer), text that shrinks to fit,
+  and opening an existing .pptx to edit.
+- **Diagrams** that stay editable: org chart, family tree, timeline, Gantt,
+  comparison table, kanban board, app wireframe and mind map — from a
+  description, or typed as an indented list / `task | start | end` lines.
+- **Polish:** *Look better* fixes margins, near-miss alignment, contrast,
+  overflowing text and too many fonts. *Critique* lists problems by rule and
+  then shows the page to JARVIS for a designer's opinion.
+- **Colours and fonts:** a palette from a mood or a photo, font pairs for a
+  vibe, a brand kit (colours, fonts, logo) applied in one click.
+- **44 templates** plus your own (Save as template), **resize to every
+  format** (Instagram, story, thumbnail, banner…), a gallery of your designs.
+- **Export:** PDF, PNG (also with a transparent background), JPG, and
+  PowerPoint with real, editable shapes and text — or *Open in PowerPoint*.
+
+The same things work in the chat: `/design <describe it>`, `/poster`,
+`/thumbnail`, `/logo`, `/greeting`, `/menu`, `/invitation`, `/sticker`,
+`/sale`, `/orgchart`, `/familytree`, `/timeline`, `/gantt`, `/comparison`,
+`/kanban`, `/wireframe`, `/ytslides`, `/quizslides`, `/palette`, `/fontpair`,
+`/headline`, `/critique`, `/resize`, `/brand` — and in plain words: “design a
+logo for Ada Coffee”, “make an org chart for my startup”. Designs are saved
+in Documents/JARVIS/designs.
+
+### JARVIS in Antigravity, Claude Code and Cursor (MCP)
+
+`JARVIS.exe --mcp` runs JARVIS as an MCP server, so the agent in your coding
+IDE can use it: make slides about a repo, draw a Gantt plan or an org chart,
+design an app icon or a thumbnail, look up the news or a definition, or ask
+JARVIS's own model chain for a second opinion. Set it up with one command:
+
+    /mcp setup antigravity     adds JARVIS to ~/.gemini/config/mcp_config.json
+    /mcp setup cursor          ~/.cursor/mcp.json
+    /mcp setup claude          prints the `claude mcp add` line to run
+
+From an IDE, JARVIS only runs safe commands (making files and looking things
+up), and says no to anything that would ask your permission. Your API keys
+stay in JARVIS's .env; the IDE never sees them.
 
 ## What's new in 8.0 — ninety-six more things
 

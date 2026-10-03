@@ -104,10 +104,17 @@ TABLES: dict[str, tuple[str, str, list[str]]] = {
         "JARVIS-dən istədiyinizi soruşun... (şəkil üçün /image təsvir)", "Windows ayarını dəyiş", "Əlsiz rejim"]),
 }
 
+# 9.0: the Design page's sidebar button, appended to every table in KEYS order.
+KEYS.append("Design")
+for _code, _word in {"de": "Design", "es": "Diseño", "fr": "Design", "pt": "Design", "ru": "Дизайн",
+                     "az": "Dizayn"}.items():
+    TABLES[_code][2].append(_word)
+
 
 def merge(languages: dict, strings: dict, answer_in: dict) -> None:
     for code, (name, instruction, values) in TABLES.items():
         languages[code] = name
         strings[code] = dict(zip(KEYS, values))
         answer_in[code] = instruction
-    strings.setdefault("tr", {}).update({"Change a Windows setting": "Bir Windows ayarını değiştir", "Hands-free": "Eller serbest"})
+    strings.setdefault("tr", {}).update({"Change a Windows setting": "Bir Windows ayarını değiştir", "Hands-free": "Eller serbest",
+                                         "Design": "Tasarım"})

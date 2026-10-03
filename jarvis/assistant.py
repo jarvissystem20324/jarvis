@@ -32,6 +32,10 @@ class JarvisResponse:
     # Several images at once, from /vary. image_path stays the first of them
     # so everything written before this field existed keeps working.
     image_paths: list[Path] = field(default_factory=list)
+    # 9.0: a design this reply made or opened. The window loads it into the
+    # Design page; show_design also switches to that page.
+    design_path: Path | None = None
+    show_design: bool = False
 
 
 class Jarvis(Everyday, Extras, Toolkit, Eight):

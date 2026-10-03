@@ -223,6 +223,18 @@ class JarvisApp(EightUI, ctk.CTk):
         )
         self.code_tab_btn.pack(fill="x", padx=16, pady=4)
 
+        # 9.0: slides, posters, logos and diagrams — built the first time it is opened.
+        self.design_tab_btn = ctk.CTkButton(
+            sidebar,
+            text="🖌  Design",
+            anchor="w",
+            height=40,
+            fg_color="transparent",
+            hover_color=COLORS["accent_dim"],
+            command=lambda: self._show_tab("design"),
+        )
+        self.design_tab_btn.pack(fill="x", padx=16, pady=4)
+
         # --- thinking mode ------------------------------------------------
         ctk.CTkFrame(sidebar, height=1, fg_color=COLORS["accent_dim"]).pack(
             fill="x", padx=16, pady=(12, 8)
@@ -1213,15 +1225,27 @@ class JarvisApp(EightUI, ctk.CTk):
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
         render.configure_tags(textbox, COLORS, getattr(self, "_font_size", FONT_SIZE))
 
+    def design_page(self):
+        """The Design page, built on first use: most sessions never open it."""
+        page = getattr(self, "_design", None)
+        if page is None:
+            from ui.designui import DesignPage
+
+            page = self._design = DesignPage(self.content, self)
+        return page
+
     def _show_tab(self, tab: str) -> None:
         self.active_tab = tab
         self.chat_frame.grid_forget()
         self.image_frame.grid_forget()
+        if getattr(self, "_design", None) is not None:
+            self._design.grid_forget()
 
         buttons = {
             "chat": self.chat_tab_btn,
             "image": self.image_tab_btn,
             "code": self.code_tab_btn,
+            "design": self.design_tab_btn,
         }
         for name, button in buttons.items():
             button.configure(
@@ -1232,6 +1256,11 @@ class JarvisApp(EightUI, ctk.CTk):
         # different persona, so splitting the history would only lose context.
         if tab == "image":
             self.image_frame.grid(row=0, column=0, sticky="nsew")
+        elif tab == "design":
+            page = self.design_page()
+            page.grid(row=0, column=0, sticky="nsew")
+            page.after(30, page.redraw)
+            return
         else:
             self.chat_frame.grid(row=0, column=0, sticky="nsew")
 
@@ -1453,6 +1482,7 @@ class JarvisApp(EightUI, ctk.CTk):
             (self.chat_tab_btn, "💬  ", "Chat"),
             (self.image_tab_btn, "🎨  ", "Image Gen"),
             (self.code_tab_btn, "⌨  ", "Code"),
+            (self.design_tab_btn, "🖌  ", "Design"),
             (self.settings_btn, "⚙  ", "Settings"),
             (self.update_btn, "⟳  ", "Check for Updates"),
             (self.send_btn, "", "Send"),
@@ -1522,6 +1552,12 @@ class JarvisApp(EightUI, ctk.CTk):
             return
 
         suffix = path.suffix.lower()
+        if self.active_tab == "design" and self.design_page().drop_file(path):
+            return
+        if suffix == ".jdesign":
+            self.design_page().open_path(path)
+            self._show_tab("design")
+            return
         if suffix in {".pdf", ".docx", ".txt", ".md"}:
             self._run_text(f"/doc {path}")
         elif suffix in {".csv", ".tsv", ".xlsx", ".xlsm"}:
@@ -1737,6 +1773,10 @@ class JarvisApp(EightUI, ctk.CTk):
         if name == "ocr" and not args.strip():
             self.after(50, self._ocr_region)
             return "Drag a box around the text you want. Escape cancels."
+        if name in {"design", "tasarla"} and not args.strip():
+            self._show_tab("design")
+            return ("The Design page: start from ＋ New, ▦ Templates or AI → “Describe it”. "
+                    "Or here: /design a poster for… · /logo … · /orgchart … · /slides …")
         if name in {"keys", "shortcuts"}:
             return "Keyboard shortcuts:\n" + "\n".join(
                 f"  {key:<16} {what}" for key, what in self.SHORTCUTS
@@ -2115,6 +2155,15 @@ class JarvisApp(EightUI, ctk.CTk):
             self._show_image_preview(paths[0])
             self._load_gallery()
 
+        if getattr(response, "design_path", None):
+            # A design made in the chat opens on the Design page, ready to edit.
+            try:
+                self.design_page().open_path(response.design_path)
+                if response.show_design:
+                    self._show_tab("design")
+            except Exception:
+                pass
+
         self._after_reply(self._last_input, response.text)
         elapsed = time.monotonic() - getattr(self, "_request_started", time.monotonic())
         if elapsed > NOTIFY_AFTER_SECONDS and self.focus_displayof() is None:
@@ -2362,6 +2411,11 @@ class JarvisApp(EightUI, ctk.CTk):
 
     def _on_close(self) -> None:
         self._eight_close()
+        if getattr(self, "_design", None) is not None:
+            try:
+                self._design.close()
+            except Exception:
+                pass
         try:
             self.jarvis.save_history()
         except Exception:

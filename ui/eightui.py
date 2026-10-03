@@ -25,8 +25,10 @@ from jarvis import eight
 
 STOP_LISTENING = re.compile(r"\b(stop listening|stop hands[- ]free|that'?s all|goodbye jarvis|dinlemeyi bırak|görüşürüz)\b", re.I)
 TOUR = [
-    ("Welcome to JARVIS 8.0", "Type or talk to me like a person. Most things don't need a command:\n"
+    ("Welcome to JARVIS 9.0", "Type or talk to me like a person. Most things don't need a command:\n"
      "“pause music”, “remind me every day at 9 to take vitamins”, “gold price”, “flip a coin”."),
+    ("New: the Design page", "🖌 Design in the sidebar: slides, posters, thumbnails, logos, cards, menus, invitations\n"
+     "and diagrams. Drag things around, or ask: “make the title bigger”. Try ▦ Templates or AI → Describe it."),
     ("Make things", "Slides, CVs, cover letters, dilekçe, invoices, mind maps, flowcharts, memes and websites.\n"
      "Try: “make a presentation about renewable energy”."),
     ("Study", "Quizzes, flashcards with spaced review, a language tutor, exact algebra, dictionary and Wikipedia.\n"

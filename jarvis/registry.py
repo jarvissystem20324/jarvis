@@ -17,7 +17,7 @@ from __future__ import annotations
 
 COMMANDS: dict[str, str] = {}
 HELP: list[tuple[str, str, str]] = []      # (group, usage, what it does)
-GROUPS = ("Make and write", "Study", "Everyday", "Live info", "PC and files", "Security",
+GROUPS = ("Make and write", "Design", "Study", "Everyday", "Live info", "PC and files", "Security",
           "Coding", "Voice, connections and fun")
 
 

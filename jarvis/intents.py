@@ -314,13 +314,32 @@ _PLACE = r"(?:\s+(?:in|for|near)\s+([a-zçğıöşü][\w .'-]+))?"
 def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
     """Plain words for the 8.0 commands. Anchored like everything above."""
     rules: list[tuple[str, str, bool]] = [
-        # make and write
+        # make and write — a YouTube link first, or the deck rule below would take it as a topic
+        (r"(?:make|create|build|generate)\s+(?:me\s+)?(?:a\s+)?(?:presentation|slides|slide\s*deck|deck)\s+(?:from|of|about|on|for)\s+(?:this\s+)?(?:youtube\s+)?(?:video\s*:?\s*)?(https?://\S*(?:youtube\.com|youtu\.be)\S*.*)", "/ytslides {0}", False),
         (r"(?:make|create|build|generate)\s+(?:me\s+)?(?:a\s+)?(?:presentation|slides|slide\s*deck|powerpoint|pptx)\s+(?:about|on|for)\s+(.+)", "/slides {0}", False),
         (r"(?:write|draft)\s+(?:an?\s+)?e-?mail\s+(.+)", "/email {0}", False),
         (r"(?:make|draw|create)\s+(?:me\s+)?a\s+mind\s*map\s+(?:of|about|on|for)\s+(.+)", "/mindmap {0}", False),
         (r"(?:make|draw|create)\s+(?:me\s+)?a\s+flow\s*chart\s+(?:of|about|on|for|showing)\s+(.+)", "/flowchart {0}", False),
         (r"(?:make|build|create)\s+(?:me\s+)?a\s+(?:website|web\s*page|landing\s*page)\s+(?:for|about)\s+(.+)", "/website {0}", False),
         (r"cite\s+((?:https?://|10\.\d{4}|\d{9,13}).+)", "/cite {0}", False),
+        # design (9.0) — only with a making verb, so "what's the timeline of…" stays a question
+        (r"(?:make|create|design|draw|generate)\s+(?:me\s+)?(?:an?\s+)?(?:youtube\s+)?thumbnail\s+(?:for|about|of)\s*:?\s*(.+)", "/thumbnail {0}", False),
+        (r"(?:make|create|design|generate)\s+(?:me\s+)?(?:an?\s+)?sale\s+(?:poster|flyer|banner)\s*(?:for|about)?\s*:?\s*(.+)", "/sale {0}", False),
+        (r"(?:make|create|design|generate)\s+(?:me\s+)?(?:an?\s+)?(?:poster|flyer)\s+(?:for|about|of)\s*:?\s*(.+)", "/poster {0}", False),
+        (r"(?:make|create|design|generate)\s+(?:me\s+)?(?:an?\s+)?logo\s+(?:for|about|of)\s*:?\s*(.+)", "/logo {0}", False),
+        (r"(?:make|create|design)\s+(?:me\s+)?(?:an?\s+)?((?:birthday|greeting|thank[\s-]you|congratulations|get\s+well|eid|bayram|new\s+year)\s+card\s+(?:for|to|about)\s*.+)", "/greeting {0}", False),
+        (r"(?:make|create|design)\s+(?:me\s+)?(?:an?\s+)?((?:restaurant|cafe|café|coffee\s+shop)?\s*menu\s+(?:for|of)\s*.+)", "/menu {0}", False),
+        (r"(?:make|create|design)\s+(?:me\s+)?(?:an?\s+|our\s+|my\s+)?((?:wedding|engagement|party|birthday)\s+invitation\s*(?:for|to|of)?\s*.+)", "/invitation {0}", False),
+        (r"(?:make|create|design)\s+(?:me\s+)?(?:an?\s+)?(?:sticker|badge)\s+(?:for|about|that\s+says|saying)\s*:?\s*(.+)", "/sticker {0}", False),
+        (r"(?:make|create|draw|build)\s+(?:me\s+)?(?:an?\s+)?org(?:anization(?:al)?)?\s*chart\s+(?:for|of)\s*:?\s*(.+)", "/orgchart {0}", False),
+        (r"(?:make|create|draw|build)\s+(?:me\s+)?(?:an?\s+|our\s+|my\s+)?family\s+tree\s*(?:for|of)?\s*:?\s*(.+)", "/familytree {0}", False),
+        (r"(?:make|create|draw|build)\s+(?:me\s+)?(?:an?\s+)?timeline\s+(?:of|for|about)\s*:?\s*(.+)", "/timeline {0}", False),
+        (r"(?:make|create|draw|build)\s+(?:me\s+)?(?:an?\s+)?gantt\s+chart\s+(?:for|of|about)\s*:?\s*(.+)", "/gantt {0}", False),
+        (r"(?:make|create|build)\s+(?:me\s+)?(?:an?\s+)?comparison\s+(?:table\s+|chart\s+)?(?:of|for|between)\s*:?\s*(.+)", "/comparison {0}", False),
+        (r"(?:make|create|build)\s+(?:me\s+)?(?:an?\s+)?kanban\s+(?:board\s+)?(?:for|of)\s*:?\s*(.+)", "/kanban {0}", False),
+        (r"(?:make|create|draw|design)\s+(?:me\s+)?(?:an?\s+)?(?:wireframe|mock-?up)\s+(?:for|of)\s*:?\s*(.+)", "/wireframe {0}", False),
+        (r"(?:make|create|design)\s+(?:me\s+)?(?:an?\s+)?((?:instagram|social\s+media|facebook|linkedin)\s+(?:post|story|banner|graphic|image)\s+(?:for|about)\s*.+)", "/design {0}", False),
+        (r"(?:make|create)\s+(?:me\s+)?(?:some\s+)?quiz\s+slides\s+(?:about|on|for)\s+(.+)", "/quizslides {0}", False),
         # study
         (r"solve\s+(.*[=<>].*|.*\b(?:derivative|integral|integrate|limit|factor|simplify)\b.*)", "/solve {0}", True),
         (r"(?:the\s+)?(?:derivative|integral)\s+of\s+(.+)", "/solve {0}", True),
@@ -381,8 +400,12 @@ def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
         (r"(?:check|summari[sz]e|read)\s+my\s+(?:e-?mail|inbox|mail)", "/inbox", False),
         (r"(?:what'?s\s+on\s+)?my\s+google\s+calendar(?:\s+(today|this\s+week|week))?", "/gcal {0}", False),
     ]
+    # Names go on designs as written: "a logo for Ada Coffee" must not become "ada coffee".
+    keep_case = ("/cal", "/mylist", "/fridge", "/thumbnail", "/sale", "/poster", "/logo", "/greeting", "/menu",
+                 "/invitation", "/sticker", "/orgchart", "/familytree", "/timeline", "/gantt", "/comparison",
+                 "/kanban", "/wireframe", "/design", "/ytslides", "/quizslides")
     for pattern, template, fall_through in rules:
-        m = re.fullmatch(pattern, low if template.startswith(("/cal", "/mylist", "/fridge")) is False else t, re.I)
+        m = re.fullmatch(pattern, t if template.startswith(keep_case) else low, re.I)
         if m is None:
             m = re.fullmatch(pattern, t, re.I)
         if m:

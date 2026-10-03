@@ -75,7 +75,7 @@ class GlobalHotkey(Addon):
         # Windows keeps its long-standing default; macOS requires opting in.
         default = WINDOWS_DEFAULT if IS_WINDOWS else ""
         combo = get_setting("JARVIS_HOTKEY", default).strip()
-        if not combo:
+        if not combo or combo.lower() in {"off", "none", "false", "0"}:
             self._status = "disabled (no JARVIS_HOTKEY set)"
             return
 
