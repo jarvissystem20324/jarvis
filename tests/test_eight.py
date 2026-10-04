@@ -82,6 +82,9 @@ def test_every_command_answers_without_arguments(base, deny, offline, monkeypatc
     from jarvis import weather
 
     monkeypatch.setattr(weather, "home_city", lambda: "")      # /wear and /uv would look the city up
+    from jarvis import kasa
+
+    monkeypatch.setattr(kasa, "discover", lambda timeout=2.0: [])   # /plugs would broadcast to the network
     for name in sorted(set(registry.COMMANDS)):
         if name in {"20q", "twentyquestions", "typing", "typingtest"}:
             continue      # these start a game, tested below
