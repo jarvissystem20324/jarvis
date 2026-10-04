@@ -102,6 +102,29 @@ def test_a_page_that_cannot_open_says_why(app, monkeypatch):
     page.destroy()
 
 
+def test_a_restarted_exe_unpacks_afresh(app, monkeypatch):
+    # 9.9.0: the new copy reused the old one's temporary folder, which the
+    # old one deleted on exit — every AI provider then failed with Errno 2.
+    import subprocess
+    import sys
+
+    from jarvis.config import fresh_process_env
+
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI12345")
+    monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+    env = fresh_process_env()
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert not [k for k in env if k.startswith("_PYI_")] and "PATH" in {k.upper() for k in env}
+
+    started = []
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: started.append((argv, kw)))
+    monkeypatch.setattr(app, "_on_close", lambda: None)
+    app.restart()
+    (argv, kw), = started
+    assert argv == [sys.executable] and kw["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
 def test_tool_cards_appear_at_once_and_their_forms_follow(app):
     import time
 

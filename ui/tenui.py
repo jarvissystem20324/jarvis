@@ -474,9 +474,11 @@ class TenUI:
         """Start a fresh JARVIS and close this one (for theme and accent changes)."""
         import subprocess
 
+        from jarvis.config import fresh_process_env
+
         try:
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable])
+                subprocess.Popen([sys.executable], env=fresh_process_env(), close_fds=True)
             else:
                 subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent.parent / "app.py")])
         except OSError:

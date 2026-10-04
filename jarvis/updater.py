@@ -325,7 +325,9 @@ def apply_update(downloaded: Path, relaunch: bool = True) -> None:
 
     if relaunch:
         try:
-            subprocess.Popen([str(live)], cwd=str(live.parent), close_fds=True)
+            from .config import fresh_process_env
+
+            subprocess.Popen([str(live)], cwd=str(live.parent), close_fds=True, env=fresh_process_env())
         except OSError as exc:
             # The update is already on disk, so this is recoverable — but the
             # dialog would otherwise sit on "Restarting..." for ever.

@@ -65,6 +65,22 @@ def get_base_dir() -> Path:
     return Path(sys.executable).parent
 
 
+def fresh_process_env() -> dict[str, str]:
+    """The environment for starting a new, independent JARVIS from this one.
+
+    The one-file EXE unpacks itself into a temporary folder and deletes it
+    when it exits. A copy started from inside it inherits _PYI_* variables
+    naming that folder, so it reuses it instead of unpacking its own, and
+    its files disappear when this copy closes. After 9.9.0's Restart, the
+    certificate bundle went first, and every AI provider failed with
+    "[Errno 2] No such file or directory". PYINSTALLER_RESET_ENVIRONMENT
+    makes the new copy unpack afresh.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def get_bundled_dir() -> Path:
     """Read-only resources shipped inside the build (addons, assets)."""
     bundle = getattr(sys, "_MEIPASS", "")
