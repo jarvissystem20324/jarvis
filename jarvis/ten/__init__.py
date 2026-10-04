@@ -16,6 +16,7 @@ from .shield10 import Shield10
 from .automate import Automate
 from .aihelp import AIHelp
 from .media import Media
+from .creator import Creator
 from .play import Play
 from .lifestyle import Lifestyle
 from .phone import Phone
@@ -23,7 +24,7 @@ from .work import Work
 from .design10 import Design10
 
 
-class Ten(Office, School, Coding, System, Shield10, Automate, AIHelp, Media, Play, Lifestyle, Phone, Work,
+class Ten(Office, School, Coding, System, Shield10, Automate, AIHelp, Media, Creator, Play, Lifestyle, Phone, Work,
           Design10):
     pass
 

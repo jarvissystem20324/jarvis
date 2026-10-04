@@ -62,7 +62,7 @@ BY_KEY = {p.key: p for p in PAGES}
 # built" placeholder; any other page that fails to open says why. (The 10.0
 # EXE once shipped without its page modules, and Home quietly showed
 # "still being built" instead of the import error.)
-STILL_BUILDING = {"phone", "creator", "everyday", "health", "money",
+STILL_BUILDING = {"phone", "everyday", "health", "money",
                   "travel", "map", "turkey"}
 
 
