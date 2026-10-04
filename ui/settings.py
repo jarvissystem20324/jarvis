@@ -101,8 +101,15 @@ class SettingsWindow(ctk.CTkToplevel):
             anchor="w", wraplength=580, justify="left",
         ).pack(anchor="w", padx=24, pady=(0, 14))
 
+        # 10.0: type to find a setting instead of scrolling for it.
+        self.search = ctk.CTkEntry(self, placeholder_text="🔎 Search settings — “voice”, “accent”, “battery”…",
+                                   height=32)
+        self.search.pack(fill="x", padx=20, pady=(0, 8))
+        self.search.bind("<KeyRelease>", lambda e: self._filter())
+
         body = ctk.CTkScrollableFrame(self, fg_color=colors["panel"])
         body.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+        self.body = body
 
         for env_name, label, where, free in FIELDS:
             self._add_row(body, env_name, label, where, free)
@@ -110,6 +117,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self._add_model_section(body)
         self._add_assistant_section(body)
         self._add_appearance_section(body)
+        self._add_ten_section(body)
+        self._rows = [(child, self._words(child), child.pack_info()) for child in body.winfo_children()]
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=24, pady=(0, 18))
@@ -325,6 +334,160 @@ class SettingsWindow(ctk.CTkToplevel):
         size_menu.set(self.original.get("JARVIS_FONT_SIZE", str(theme.DEFAULT_FONT)))
         size_menu.pack(side="left")
         self.choices["JARVIS_FONT_SIZE"] = (size_menu, None)
+
+    def _add_ten_section(self, parent) -> None:
+        """10.0: your colour, your picture, how the window behaves, extra keys."""
+        self._heading(parent, "Look and feel",
+                      "Accent colour and chat style apply after a restart (the button below restarts JARVIS).")
+        row = self._labelled(parent, "Accent colour")
+        accent = ctk.CTkEntry(row, height=30, width=110, placeholder_text="#00d4ff")
+        accent.pack(side="left")
+        if self.original.get("JARVIS_ACCENT"):
+            accent.insert(0, self.original["JARVIS_ACCENT"])
+        self.entries["JARVIS_ACCENT"] = accent
+        swatch = ctk.CTkLabel(row, text="", width=28, height=28, corner_radius=6,
+                              fg_color=self.original.get("JARVIS_ACCENT") or self.colors["accent"])
+        swatch.pack(side="left", padx=6)
+
+        def pick():
+            from tkinter import colorchooser
+
+            chosen = colorchooser.askcolor(parent=self, initialcolor=accent.get() or self.colors["accent"])
+            if chosen and chosen[1]:
+                accent.delete(0, "end")
+                accent.insert(0, chosen[1])
+                swatch.configure(fg_color=chosen[1])
+
+        ctk.CTkButton(row, text="Pick…", width=64, height=28, fg_color="transparent",
+                      hover_color=self.colors["accent_dim"], command=pick).pack(side="left")
+        ctk.CTkButton(row, text="Theme default", width=100, height=28, fg_color="transparent",
+                      hover_color=self.colors["accent_dim"],
+                      command=lambda: (accent.delete(0, "end"), swatch.configure(fg_color=self.colors["accent"]))
+                      ).pack(side="left", padx=4)
+
+        from ui.tenui import CHAT_STYLES
+
+        row = self._labelled(parent, "Chat style")
+        menu = ctk.CTkOptionMenu(row, values=list(CHAT_STYLES.values()), width=140)
+        menu.set(CHAT_STYLES.get(self.original.get("JARVIS_CHAT_STYLE", "classic"), "Classic"))
+        menu.pack(side="left")
+        self.choices["JARVIS_CHAT_STYLE"] = (menu, {v: k for k, v in CHAT_STYLES.items()})
+
+        row = self._labelled(parent, "Your name")
+        name = ctk.CTkEntry(row, height=30, placeholder_text="shown on your messages and the Home page")
+        name.pack(side="left", fill="x", expand=True)
+        if self.original.get("JARVIS_USER_NAME"):
+            name.insert(0, self.original["JARVIS_USER_NAME"])
+        self.entries["JARVIS_USER_NAME"] = name
+
+        row = self._labelled(parent, "Your picture")
+        avatar = ctk.CTkEntry(row, height=30, placeholder_text="a photo for your chat messages")
+        avatar.pack(side="left", fill="x", expand=True)
+        if self.original.get("JARVIS_AVATAR"):
+            avatar.insert(0, self.original["JARVIS_AVATAR"])
+        self.entries["JARVIS_AVATAR"] = avatar
+
+        def browse():
+            from tkinter import filedialog
+
+            path = filedialog.askopenfilename(parent=self, filetypes=[("Pictures", "*.png *.jpg *.jpeg *.webp")])
+            if path:
+                avatar.delete(0, "end")
+                avatar.insert(0, path)
+
+        ctk.CTkButton(row, text="Browse…", width=70, height=28, fg_color="transparent",
+                      hover_color=self.colors["accent_dim"], command=browse).pack(side="left", padx=4)
+
+        from ui.pages import PAGES
+
+        pages = {p.key: p.label for p in PAGES}
+        row = self._labelled(parent, "Start on")
+        menu = ctk.CTkOptionMenu(row, values=list(pages.values()), width=140)
+        menu.set(pages.get(self.original.get("JARVIS_START_PAGE", "chat"), "Chat"))
+        menu.pack(side="left")
+        self.choices["JARVIS_START_PAGE"] = (menu, {v: k for k, v in pages.items()})
+
+        switch = {"on": "On", "off": "Off"}
+        for env_name, label, default in (("JARVIS_TOASTS", "Corner notifications", "on"),
+                                         ("JARVIS_STATUSBAR", "Status bar", "on"),
+                                         ("JARVIS_CHIPS", "Tool chips while typing", "on"),
+                                         ("JARVIS_ORB", "Floating orb at start", "off")):
+            row = self._labelled(parent, label)
+            menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+            current = self.original.get(env_name, default).strip().lower()
+            menu.set("Off" if current in {"off", "0", "false", "no"} else "On")
+            menu.pack(side="left")
+            self.choices[env_name] = (menu, {v: k for k, v in switch.items()})
+
+        row = self._labelled(parent, "Notifications corner")
+        menu = ctk.CTkOptionMenu(row, values=["Bottom right", "Top right"], width=140)
+        menu.set("Top right" if self.original.get("JARVIS_TOAST_CORNER", "") == "top" else "Bottom right")
+        menu.pack(side="left")
+        self.choices["JARVIS_TOAST_CORNER"] = (menu, {"Bottom right": "bottom", "Top right": "top"})
+
+        for env_name, label, hint in (("JARVIS_BATTERY_ALERT", "Battery alert at (%)", "20"),
+                                      ("JARVIS_EOD_AT", "End-of-day summary at", "21:00 — blank: off")):
+            row = self._labelled(parent, label)
+            box = ctk.CTkEntry(row, height=30, placeholder_text=hint)
+            box.pack(side="left", fill="x", expand=True)
+            if self.original.get(env_name):
+                box.insert(0, self.original[env_name])
+            self.entries[env_name] = box
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=6)
+        ctk.CTkButton(row, text="⌨ Keyboard shortcuts…", fg_color="transparent", hover_color=self.colors["accent_dim"],
+                      command=lambda: self.master.open_shortcut_editor()).pack(side="left")
+        ctk.CTkButton(row, text="↻ Save and restart JARVIS", fg_color=self.colors["accent_dim"],
+                      hover_color=self.colors["accent"], command=self._save_and_restart).pack(side="left", padx=8)
+
+        self._heading(parent, "Other keys", "Optional services some tools use. Stored only in .env on this PC.")
+        for env_name, label, hint in (("VIRUSTOTAL_API_KEY", "VirusTotal", "virustotal.com → API key (free)"),
+                                      ("GITHUB_TOKEN", "GitHub token", "optional — more /github lookups per hour"),
+                                      ("JARVIS_HA_URL", "Home Assistant URL", "http://homeassistant.local:8123"),
+                                      ("JARVIS_HA_TOKEN", "Home Assistant token", "Profile → Long-lived access token")):
+            row = self._labelled(parent, label)
+            box = ctk.CTkEntry(row, height=30, placeholder_text=hint, show="" if env_name.endswith("URL") else "•")
+            box.pack(side="left", fill="x", expand=True)
+            if self.original.get(env_name):
+                box.insert(0, self.original[env_name])
+            self.entries[env_name] = box
+
+    def _save_and_restart(self) -> None:
+        self._save()
+        try:
+            self.master.restart()
+        except Exception:
+            pass
+
+    # --- search --------------------------------------------------------------
+
+    @staticmethod
+    def _words(widget) -> str:
+        found = []
+        stack = [widget]
+        while stack:
+            current = stack.pop()
+            for attr in ("_text", "_placeholder_text"):
+                value = getattr(current, attr, None)
+                if isinstance(value, str):
+                    found.append(value)
+            try:
+                if isinstance(current, ctk.CTkOptionMenu):
+                    found.extend(str(v) for v in current.cget("values") or [])
+            except Exception:
+                pass
+            stack.extend(current.winfo_children())
+        return " ".join(found).lower()
+
+    def _filter(self) -> None:
+        query = self.search.get().strip().lower()
+        for child, _words, _info in self._rows:
+            child.pack_forget()
+        for child, words, info in self._rows:
+            if not query or all(w in words for w in query.split()):
+                info = {k: v for k, v in info.items() if k != "in"}
+                child.pack(**info)
 
     # --- actions ----------------------------------------------------------
 

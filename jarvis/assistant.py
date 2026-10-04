@@ -346,6 +346,11 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
         if self._translate_to:
             return JarvisResponse(text=self.translate_line(text))
 
+        # 10.0: your own routines — "good night" runs the steps you set up.
+        routine = self.match_routine(text)
+        if routine is not None:
+            return JarvisResponse(text=routine)
+
         # "pause music", "remind me in 20 minutes…", "open spotify": things
         # with an exact local answer are done here, not described by a model.
         handled = self.route_plain(text)

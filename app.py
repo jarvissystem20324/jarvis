@@ -299,12 +299,25 @@ def selftest() -> int:
         reply = mcp_server.Server(jarvis=object()).handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         return f"{len(reply['result']['tools'])} tools"
 
+    # 10.0: the pages are imported by name, so a build can leave them out
+    # without any other check noticing. One did: Home and Coding were empty.
+    def _pages() -> str:
+        from ui.pages import PAGES, STILL_BUILDING, page_class
+
+        ready = [p.key for p in PAGES if p.target and p.key not in STILL_BUILDING]
+        for key in ready:
+            page_class(key)
+        from jarvis import catalog
+
+        return f"{len(ready)} pages open, {len(STILL_BUILDING)} still being built, {len(catalog.tools())} tools"
+
     check("slides", _slides)
     check("design page", _design)
     check("MCP server", _mcp)
     check("exact algebra", _algebra)
     check("file encryption", _crypto)
     check("8.0 commands", _eight)
+    check("10.0 pages", _pages)
     check("power controls", lambda: "shutdown.exe present" if __import__("shutil").which("shutdown") else "not on this platform")
 
     from jarvis import config as _cfg

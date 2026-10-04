@@ -76,6 +76,46 @@ THEMES: dict[str, dict[str, str]] = {
     },
 }
 
+# 10.0: two from the films. The HUD is the holographic blue of the helmet
+# display; Mark III is the suit's red and gold. Both checked against the
+# same contrast as the others: body text on bg stays above 7:1.
+THEMES["hud"] = {
+    "label": "Iron Man HUD",
+    "appearance": "dark",
+    "bg": "#03080f",
+    "panel": "#071522",
+    "accent": "#4fd1ff",
+    "accent_dim": "#0b4a66",
+    "text": "#d6f3ff",
+    "user": "#ffd166",
+    "muted": "#5c8aa3",
+    "error": "#ff5d5d",
+    "ok": "#5dffb0",
+    "code_bg": "#020d16",
+    "kw": "#7ee8ff",
+    "str": "#a8ff9e",
+    "com": "#4d7488",
+    "num": "#ffcf6e",
+}
+THEMES["ironman"] = {
+    "label": "Mark III (red and gold)",
+    "appearance": "dark",
+    "bg": "#120607",
+    "panel": "#1f0b0d",
+    "accent": "#ffc34d",
+    "accent_dim": "#8a1c1f",
+    "text": "#f6e7d8",
+    "user": "#ff8a65",
+    "muted": "#a3807a",
+    "error": "#ff6b6b",
+    "ok": "#9be15d",
+    "code_bg": "#0d0405",
+    "kw": "#ffb74d",
+    "str": "#c5e1a5",
+    "com": "#8d6e63",
+    "num": "#ffd54f",
+}
+
 # Every theme must define exactly these. Checked at import so a half-written
 # palette fails here rather than halfway through drawing the window.
 REQUIRED = set(THEMES[DEFAULT])
@@ -103,4 +143,38 @@ def from_env() -> tuple[dict[str, str], str, int]:
         size = int(get_setting("JARVIS_FONT_SIZE", str(DEFAULT_FONT)))
     except ValueError:
         size = DEFAULT_FONT
-    return THEMES[wanted], wanted, max(MIN_FONT, min(MAX_FONT, size))
+    palette = with_accent(THEMES[wanted], get_setting("JARVIS_ACCENT", ""))
+    return palette, wanted, max(MIN_FONT, min(MAX_FONT, size))
+
+
+def _hex(colour: str) -> tuple[int, int, int] | None:
+    colour = (colour or "").strip().lstrip("#")
+    if len(colour) == 3:
+        colour = "".join(c * 2 for c in colour)
+    if len(colour) != 6:
+        return None
+    try:
+        return tuple(int(colour[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return None
+
+
+def _mix(a: tuple, b: tuple, t: float) -> str:
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
+def with_accent(palette: dict[str, str], accent: str) -> dict[str, str]:
+    """The palette with the user's own accent colour (10.0).
+
+    The dim shade is mixed toward the background rather than picked, so any
+    colour works on any theme: buttons stay readable and the selected row is
+    still visibly the same hue.
+    """
+    rgb = _hex(accent)
+    if rgb is None:
+        return dict(palette)
+    out = dict(palette)
+    bg = _hex(palette["bg"]) or (0, 0, 0)
+    out["accent"] = "#%02x%02x%02x" % rgb
+    out["accent_dim"] = _mix(rgb, bg, 0.55 if palette["appearance"] == "dark" else 0.35)
+    return out

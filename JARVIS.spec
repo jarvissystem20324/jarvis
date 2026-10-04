@@ -72,6 +72,14 @@ for pkg in ("pptx", "sympy", "yaml", "cryptography"):
         pass
 hiddenimports += ["sympy.parsing.sympy_parser", "cryptography.hazmat.primitives.ciphers.aead",
                   "cryptography.hazmat.primitives.kdf.scrypt", "win32clipboard", "pypdf", "imaplib"]
+# 10.0: the window's pages are imported by name the first time they open
+# (ui/pages/__init__.py), which static analysis cannot see. Without this the
+# EXE had no Home or Coding page. The self-test fails if one is missing.
+from pathlib import Path
+
+hiddenimports += [f"ui.pages.{p.stem}" for p in sorted((Path(SPECPATH) / "ui" / "pages").glob("*.py"))
+                  if p.stem != "__init__"]
+hiddenimports += ["pygments.lexers", "pygments.styles"]
 
 a = Analysis(
     ["app.py"],

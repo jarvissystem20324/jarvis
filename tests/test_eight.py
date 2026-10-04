@@ -49,7 +49,9 @@ def test_every_command_has_a_method_and_help_lists_the_groups(base):
     for name, method in registry.COMMANDS.items():
         assert callable(getattr(Jarvis, method)), name
     text = registry.help_text()
-    for group in registry.GROUPS:
+    # Every group that has commands; 10.0 also names groups for pages still
+    # being built (Media…), which have none yet and are left out of help.
+    for group in {g for g, _, _ in registry.HELP}:
         assert group in text
     assert len(registry.COMMANDS) >= 96
 

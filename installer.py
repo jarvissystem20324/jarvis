@@ -417,8 +417,11 @@ class InstallerApp(ctk.CTk):
         self.finished = False
 
         self.title(f"{APP_NAME} {APP_VERSION} " + ("Uninstaller" if uninstall_mode else "Setup"))
-        self.geometry("620x560")
-        self.resizable(False, False)
+        # The key list keeps growing, so size to the screen and let the
+        # window stretch rather than pushing the Install button off the end.
+        height = min(720, self.winfo_screenheight() - 80)
+        self.geometry(f"640x{height}")
+        self.minsize(560, 480)
         self.configure(fg_color=COLORS["bg"])
 
         try:
@@ -449,6 +452,9 @@ class InstallerApp(ctk.CTk):
             text_color=COLORS["muted"],
         ).pack()
 
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
+
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=16)
 
@@ -459,17 +465,14 @@ class InstallerApp(ctk.CTk):
 
         self.log_box = ctk.CTkTextbox(
             body,
-            height=150,
+            height=90,
             wrap="word",
             font=ctk.CTkFont(size=11),
             fg_color="#0f172a",
             text_color=COLORS["text"],
         )
-        self.log_box.pack(fill="both", expand=True, pady=(12, 8))
+        self.log_box.pack(side="bottom", fill="x", pady=(12, 8))
         self.log_box.configure(state="disabled")
-
-        footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.pack(fill="x", padx=24, pady=(0, 18))
 
         self.action_btn = ctk.CTkButton(
             footer,
@@ -494,7 +497,9 @@ class InstallerApp(ctk.CTk):
         )
         self.close_btn.pack(side="right", padx=(0, 10))
 
-    def _build_install(self, body) -> None:
+    def _build_install(self, outer) -> None:
+        body = ctk.CTkScrollableFrame(outer, fg_color="transparent")
+        body.pack(side="top", fill="both", expand=True)
         ctk.CTkLabel(
             body, text="Install location", text_color=COLORS["text"], anchor="w"
         ).pack(fill="x")
@@ -521,7 +526,7 @@ class InstallerApp(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color=COLORS["muted"],
             anchor="w",
-            wraplength=540,
+            wraplength=520,
             justify="left",
         ).pack(fill="x", pady=(2, 6))
 

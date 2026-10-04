@@ -138,6 +138,21 @@ speak, let go, and the words are typed where your cursor is.
 six sample rows, answers with a small query, and JARVIS runs that query
 itself — so a sum is a sum, not an estimate.
 
+## 10.0 preview (9.9.0)
+
+A preview of 10.0, about 170 of its 282 features. It is released as a GitHub pre-release, so installed copies don't update to it on their own.
+
+- **Every command is in the window.** The Tools page has a tile and a form for each command; Ctrl+K jumps to any page or tool; suggestions appear under the chat box. (Clear chat moved to Ctrl+Shift+K.)
+- **New pages:**
+  - Home, Coding (an IDE-style page), Documents, Study;
+  - Today, Calendar, Notes, Inbox;
+  - PC, Security, Antivirus (Microsoft Defender's engine), Automations;
+  - Memory, Voice.
+- **Look and feel:**
+  - HUD and Iron Man themes, accent colour, chat styles, a floating orb, a status bar, corner notifications;
+  - Ctrl+Alt+R works on selected text in any app; hold Ctrl+Alt+V to talk to JARVIS from any app.
+- **Still being built:** Design 2.0, Media, Music, Creator, Gaming, Arcade, Everyday, Health, Money, Travel, Map, Türkiye, Phone. These pages say so; their commands still work from the chat and the Tools page.
+
 ## What's new in 9.0 — the Design page
 
 **🖌 Design** in the sidebar is a design editor for slides, YouTube

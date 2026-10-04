@@ -27,12 +27,13 @@ from .makers import Makers
 from .pctools import PCTools
 from .social import Social
 from .study import Study
+from .ten import Ten
 
 SECRET_COMMANDS = {"passcheck", "passwordcheck", "pwned", "breach"}
 FIRE_KINDS = {"watch", "prayer", "word", "dnd"}
 
 
-class Eight(Makers, Study, Life, Live, PCTools, Guard, DevTools, Social, Designer):
+class Eight(Makers, Study, Life, Live, PCTools, Guard, DevTools, Social, Designer, Ten):
     def eight_command(self, name: str, args: str, routed: bool = False):
         method = registry.COMMANDS.get(name)
         if method is None:

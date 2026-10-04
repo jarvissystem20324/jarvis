@@ -112,9 +112,23 @@ def base(tmp_path, monkeypatch):
     power._pending.clear()
     power.dry_log.clear()
 
+    # 10.0: the window's own preferences are cached once read, and the
+    # background watchers (automations, alerts, the phone link) must not
+    # start in a test run at all.
+    from jarvis import prefs
+
+    prefs.reset_cache()
+    monkeypatch.setenv("JARVIS_WATCHERS", "off")
+    monkeypatch.setenv("JARVIS_PHONE_LINK", "off")
+    monkeypatch.setenv("JARVIS_SELECT_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_PTT_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_START_PAGE", "chat")
+    monkeypatch.setenv("JARVIS_ORB", "off")
+
     security.privacy.on = False
     security.permissions.set_asker(None)
     yield tmp_path
+    prefs.reset_cache()
     security.permissions.set_asker(None)
     security.privacy.on = False
 

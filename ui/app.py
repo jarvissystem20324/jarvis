@@ -23,6 +23,7 @@ from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
 from jarvis import applock, i18n, intents, reminders, schedule, updater
 from ui import notify, render, theme
 from ui.eightui import FIRE_KINDS, EightUI
+from ui.tenui import TenUI, seq_label
 
 ctk.set_default_color_theme("blue")
 
@@ -68,7 +69,7 @@ def _make_placeholder_logo(size: int = 96) -> Image.Image:
     return image
 
 
-class JarvisApp(EightUI, ctk.CTk):
+class JarvisApp(EightUI, TenUI, ctk.CTk):
     def __init__(self):
         super().__init__()
 
@@ -141,6 +142,7 @@ class JarvisApp(EightUI, ctk.CTk):
         reminders.board.start(self._reminder_fired)
         self.after(1500, self._report_missed)
         self._eight_init()
+        self._ten_init()
 
         updater.cleanup_previous_update()
         # Quietly look for a new version a moment after the window settles.
@@ -184,63 +186,21 @@ class JarvisApp(EightUI, ctk.CTk):
 
         ctk.CTkLabel(
             sidebar,
-            text="Just A Rather Very\nIntelligent System",
-            font=ctk.CTkFont(size=11),
+            text="Just A Rather Very Intelligent System",
+            font=ctk.CTkFont(size=10),
             text_color="#64748b",
             justify="left",
-        ).pack(fill="x", padx=16, pady=(0, 20))
-
-        self.chat_tab_btn = ctk.CTkButton(
-            sidebar,
-            text="💬  Chat",
             anchor="w",
-            height=40,
-            fg_color=COLORS["accent_dim"],
-            hover_color=COLORS["accent_dim"],
-            command=lambda: self._show_tab("chat"),
-        )
-        self.chat_tab_btn.pack(fill="x", padx=16, pady=4)
+        ).pack(fill="x", padx=16, pady=(0, 6))
 
-        self.image_tab_btn = ctk.CTkButton(
-            sidebar,
-            text="🎨  Image Gen",
-            anchor="w",
-            height=40,
-            fg_color="transparent",
-            hover_color=COLORS["accent_dim"],
-            command=lambda: self._show_tab("image"),
-        )
-        self.image_tab_btn.pack(fill="x", padx=16, pady=4)
+        # Packed before the page list so the list, not these, gives way on a
+        # short screen.
+        bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x")
 
-        self.code_tab_btn = ctk.CTkButton(
-            sidebar,
-            text="⌨  Code",
-            anchor="w",
-            height=40,
-            fg_color="transparent",
-            hover_color=COLORS["accent_dim"],
-            command=lambda: self._show_tab("code"),
-        )
-        self.code_tab_btn.pack(fill="x", padx=16, pady=4)
-
-        # 9.0: slides, posters, logos and diagrams — built the first time it is opened.
-        self.design_tab_btn = ctk.CTkButton(
-            sidebar,
-            text="🖌  Design",
-            anchor="w",
-            height=40,
-            fg_color="transparent",
-            hover_color=COLORS["accent_dim"],
-            command=lambda: self._show_tab("design"),
-        )
-        self.design_tab_btn.pack(fill="x", padx=16, pady=4)
-
-        # --- thinking mode ------------------------------------------------
-        ctk.CTkFrame(sidebar, height=1, fg_color=COLORS["accent_dim"]).pack(
-            fill="x", padx=16, pady=(12, 8)
-        )
+        ctk.CTkFrame(bottom, height=1, fg_color=COLORS["accent_dim"]).pack(fill="x", padx=16, pady=(4, 6))
         ctk.CTkLabel(
-            sidebar,
+            bottom,
             text="THINKING MODE",
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color=COLORS["muted"],
@@ -248,10 +208,10 @@ class JarvisApp(EightUI, ctk.CTk):
         ).pack(fill="x", padx=18)
 
         self.mode_btn = ctk.CTkButton(
-            sidebar,
+            bottom,
             text="",
             anchor="w",
-            height=42,
+            height=36,
             fg_color=COLORS["bg"],
             hover_color=COLORS["accent_dim"],
             command=self._cycle_mode,
@@ -259,7 +219,7 @@ class JarvisApp(EightUI, ctk.CTk):
         self.mode_btn.pack(fill="x", padx=16, pady=(4, 2))
 
         self.mode_blurb = ctk.CTkLabel(
-            sidebar,
+            bottom,
             text="",
             font=ctk.CTkFont(size=10),
             text_color=COLORS["muted"],
@@ -267,11 +227,11 @@ class JarvisApp(EightUI, ctk.CTk):
             wraplength=186,
             justify="left",
         )
-        self.mode_blurb.pack(fill="x", padx=18, pady=(0, 6))
+        self.mode_blurb.pack(fill="x", padx=18, pady=(0, 4))
 
         # Five pips showing where this mode sits on the scale.
-        self.mode_pips = ctk.CTkFrame(sidebar, fg_color="transparent", height=6)
-        self.mode_pips.pack(fill="x", padx=18, pady=(0, 10))
+        self.mode_pips = ctk.CTkFrame(bottom, fg_color="transparent", height=6)
+        self.mode_pips.pack(fill="x", padx=18, pady=(0, 6))
         self._pip_widgets = []
         for _ in modes.ALL:
             pip = ctk.CTkFrame(self.mode_pips, height=4, width=30,
@@ -279,72 +239,64 @@ class JarvisApp(EightUI, ctk.CTk):
             pip.pack(side="left", padx=2)
             self._pip_widgets.append(pip)
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=COLORS["accent_dim"]).pack(
-            fill="x", padx=16, pady=(2, 10)
-        )
-
         self.voice_btn = ctk.CTkButton(
-            sidebar,
+            bottom,
             text=self._voice_label(),
             anchor="w",
-            height=40,
+            height=30,
             fg_color="transparent",
             hover_color=COLORS["accent_dim"],
             command=self._toggle_voice,
         )
-        self.voice_btn.pack(fill="x", padx=16, pady=4)
-
-        ctk.CTkButton(
-            sidebar,
-            text="🗑  Clear Chat",
-            anchor="w",
-            height=40,
-            fg_color="transparent",
-            hover_color="#374151",
-            command=self._clear_chat,
-        ).pack(fill="x", padx=16, pady=4)
+        self.voice_btn.pack(fill="x", padx=16, pady=1)
 
         self.settings_btn = ctk.CTkButton(
-            sidebar,
+            bottom,
             text="⚙  Settings",
             anchor="w",
-            height=40,
+            height=30,
             fg_color="transparent",
             hover_color=COLORS["accent_dim"],
             command=self._open_settings,
         )
-        self.settings_btn.pack(fill="x", padx=16, pady=4)
+        self.settings_btn.pack(fill="x", padx=16, pady=1)
 
         self.update_btn = ctk.CTkButton(
-            sidebar,
+            bottom,
             text="⟳  Check for Updates",
             anchor="w",
-            height=40,
+            height=30,
             fg_color="transparent",
             hover_color=COLORS["accent_dim"],
             command=lambda: self._check_updates(silent=False),
         )
-        self.update_btn.pack(fill="x", padx=16, pady=4)
-
-        self.status_label = ctk.CTkLabel(
-            sidebar,
-            text="Ready",
-            font=ctk.CTkFont(size=11),
-            text_color="#64748b",
-            wraplength=190,
-        )
-        self.status_label.pack(side="bottom", fill="x", padx=16, pady=(4, 16))
+        self.update_btn.pack(fill="x", padx=16, pady=1)
 
         # Which backend is answering — matters now that JARVIS can fall back
         # between providers without saying so.
         self.provider_label = ctk.CTkLabel(
-            sidebar,
+            bottom,
             text=self._provider_text(),
             font=ctk.CTkFont(size=10),
             text_color="#475569",
             wraplength=190,
         )
-        self.provider_label.pack(side="bottom", fill="x", padx=16, pady=(8, 0))
+        self.provider_label.pack(fill="x", padx=16, pady=(6, 0))
+
+        self.status_label = ctk.CTkLabel(
+            bottom,
+            text="Ready",
+            font=ctk.CTkFont(size=11),
+            text_color="#64748b",
+            wraplength=190,
+        )
+        self.status_label.pack(fill="x", padx=16, pady=(2, 12))
+
+        # 10.0: every page in one scrolling list, in sections that fold away,
+        # so thirty pages fit a sidebar that was drawn for four.
+        self.nav = ctk.CTkScrollableFrame(sidebar, fg_color="transparent")
+        self.nav.pack(fill="both", expand=True, padx=4, pady=(0, 2))
+        self._build_nav()
 
         # Main content area
         self.content = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
@@ -421,6 +373,13 @@ class JarvisApp(EightUI, ctk.CTk):
         self.stop_btn.grid(row=0, column=3, padx=(8, 0))
         self.stop_btn.grid_remove()
 
+        # 10.0: tools that match what is being typed, so nobody has to
+        # remember a command to find one.
+        self.chips_row = ctk.CTkFrame(input_row, fg_color="transparent")
+        self.chips_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.chips_row.grid_remove()
+        self.chat_input.bind("<KeyRelease>", self._chips_later, add="+")
+
         # A row of things you otherwise have to remember a command for.
         quick = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         self.quick_row = quick
@@ -435,6 +394,7 @@ class JarvisApp(EightUI, ctk.CTk):
             ("⌨ Shortcuts", lambda: self._quick(self._ui_command("/keys") or "")),
             ("📎 Attach", self._choose_file),
             ("✂ Snip", lambda: self._run_text("/snip")),
+            ("🗑 Clear", self._clear_chat),
         ):
             ctk.CTkButton(
                 quick, text=label, height=26, width=0,
@@ -1224,6 +1184,7 @@ class JarvisApp(EightUI, ctk.CTk):
         """Define every text tag. CTkTextbox wraps a tk.Text underneath."""
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
         render.configure_tags(textbox, COLORS, getattr(self, "_font_size", FONT_SIZE))
+        self._style_tags(textbox)
 
     def design_page(self):
         """The Design page, built on first use: most sessions never open it."""
@@ -1234,26 +1195,96 @@ class JarvisApp(EightUI, ctk.CTk):
             page = self._design = DesignPage(self.content, self)
         return page
 
+    # --- 10.0: pages ---------------------------------------------------------
+
+    def _build_nav(self) -> None:
+        from ui import prefs
+        from ui.pages import PAGES, SECTIONS
+
+        self.nav_buttons: dict[str, ctk.CTkButton] = {}
+        self._nav_sections: dict[str, tuple] = {}
+        self.pages: dict = {}
+        opened = set(prefs.get("nav_open", ["Main", "Work"]))
+        for section in SECTIONS:
+            header = ctk.CTkButton(
+                self.nav, text="", anchor="w", height=22, fg_color="transparent",
+                hover_color=COLORS["panel"], text_color=COLORS["muted"],
+                font=ctk.CTkFont(size=10, weight="bold"),
+                command=lambda s=section: self._toggle_section(s),
+            )
+            header.pack(fill="x", pady=(6, 0))
+            frame = ctk.CTkFrame(self.nav, fg_color="transparent")
+            for page in PAGES:
+                if page.section != section:
+                    continue
+                b = ctk.CTkButton(
+                    frame, text=f"{page.icon}  {i18n.t(page.label)}", anchor="w", height=32,
+                    fg_color="transparent", hover_color=COLORS["accent_dim"],
+                    command=lambda k=page.key: self._show_tab(k),
+                )
+                b.pack(fill="x", padx=6, pady=1)
+                self.nav_buttons[page.key] = b
+            self._nav_sections[section] = (header, frame)
+            self._set_section(section, section in opened, save=False)
+        self.chat_tab_btn = self.nav_buttons["chat"]
+        self.image_tab_btn = self.nav_buttons["image"]
+        self.code_tab_btn = self.nav_buttons["code"]
+        self.design_tab_btn = self.nav_buttons["design"]
+
+    def _set_section(self, section: str, open_: bool, save: bool = True) -> None:
+        header, frame = self._nav_sections[section]
+        header.configure(text=f"{'▾' if open_ else '▸'}  {i18n.t(section).upper()}")
+        if open_ and not frame.winfo_ismapped():
+            frame.pack(fill="x", after=header)
+        elif not open_:
+            frame.pack_forget()
+        if save:
+            from ui import prefs
+
+            prefs.set("nav_open", [s for s, (_, f) in self._nav_sections.items()
+                                   if (f.winfo_ismapped() if s != section else open_)])
+
+    def _toggle_section(self, section: str) -> None:
+        _, frame = self._nav_sections[section]
+        self._set_section(section, not frame.winfo_ismapped())
+
+    def page(self, key: str):
+        """A 10.0 page, created the first time it is asked for."""
+        page = self.pages.get(key)
+        if page is None:
+            from ui.pages import make
+
+            page = self.pages[key] = make(key, self.content, self)
+        return page
+
     def _show_tab(self, tab: str) -> None:
+        from ui.pages import BY_KEY
+
+        if tab not in BY_KEY:
+            tab = "chat"
+        previous = getattr(self, "active_tab", "")
         self.active_tab = tab
         self.chat_frame.grid_forget()
         self.image_frame.grid_forget()
         if getattr(self, "_design", None) is not None:
             self._design.grid_forget()
+        for key, page in getattr(self, "pages", {}).items():
+            if key != tab:
+                page.grid_forget()
+                if key == previous:
+                    try:
+                        page.on_hide()
+                    except Exception:
+                        pass
 
-        buttons = {
-            "chat": self.chat_tab_btn,
-            "image": self.image_tab_btn,
-            "code": self.code_tab_btn,
-            "design": self.design_tab_btn,
-        }
-        for name, button in buttons.items():
+        for name, button in self.nav_buttons.items():
             button.configure(
                 fg_color=COLORS["accent_dim"] if name == tab else "transparent"
             )
+        section = BY_KEY[tab].section
+        if not self._nav_sections[section][1].winfo_ismapped():
+            self._set_section(section, True)
 
-        # Code shares the chat transcript — it is the same conversation with a
-        # different persona, so splitting the history would only lose context.
         if tab == "image":
             self.image_frame.grid(row=0, column=0, sticky="nsew")
         elif tab == "design":
@@ -1262,14 +1293,147 @@ class JarvisApp(EightUI, ctk.CTk):
             page.after(30, page.redraw)
             page.after(60, page.canvas.focus_set)
             return
-        else:
+        elif tab == "chat":
             self.chat_frame.grid(row=0, column=0, sticky="nsew")
+        else:
+            page = self.page(tab)
+            page.grid(row=0, column=0, sticky="nsew")
+            page.show()
 
+        # The Coding page's agent and the chat share one conversation; the
+        # page switches the engineer persona on, the chat switches it off.
         if tab == "code" and not self.jarvis.brain.code_mode:
-            self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
+            self.jarvis.toggle_code_mode()
         elif tab == "chat" and self.jarvis.brain.code_mode:
             self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
         self.refresh_code_mode()
+
+    def tool(self, name: str):
+        from jarvis import catalog
+
+        found = catalog.tools(getattr(self.jarvis, "addons", None))
+        tool = found.get(name)
+        if tool is None:
+            tool = next((t for t in found.values() if name in t.names), None)
+        return tool
+
+    def open_tool(self, name: str, prefill: dict | None = None) -> None:
+        """A command's form in its own window (Tools page, Ctrl+K, chips)."""
+        from jarvis import catalog
+        from ui.pages.base import ToolDialog
+
+        tool = self.tool(name)
+        if tool is None:
+            return
+        catalog.used(tool.name)
+        if tool.chat and not any(not f.optional for f in tool.fields):
+            self.prefill_chat(f"/{tool.name} ")
+            return
+        ToolDialog(self, tool, prefill)
+
+    def run_tool(self, text: str, done, name: str = "") -> None:
+        """Run a command for a page or a form, off the Tk thread.
+
+        Forms do not write into the conversation: the answer is shown where
+        the button was pressed. One at a time, so two forms cannot race on
+        the same document or the same provider quota.
+        """
+        from jarvis import catalog
+        from ui.pages.base import background
+
+        if name:
+            catalog.used(name)
+        lock = getattr(self, "_tool_lock", None)
+        if lock is None:
+            lock = self._tool_lock = threading.Lock()
+
+        def work():
+            with lock:
+                return self.jarvis.process(text)
+
+        background(self, work, done)
+
+    def run_in_chat(self, text: str) -> None:
+        self._show_tab("chat")
+        if self._busy:
+            self.prefill_chat(text)
+        else:
+            self._run_text(text)
+
+    def prefill_chat(self, text: str) -> None:
+        self._show_tab("chat")
+        self.chat_input.delete(0, "end")
+        self.chat_input.insert(0, text)
+        self.chat_input.icursor("end")
+        self.chat_input.focus_set()
+
+    def open_design(self, path: Path) -> None:
+        try:
+            self.design_page().open_path(path)
+            self._show_tab("design")
+        except Exception:
+            pass
+
+    def open_palette(self) -> None:
+        from ui.pages.tools import Palette
+
+        existing = getattr(self, "_palette", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.destroy()
+        except tkinter.TclError:
+            pass
+        self._palette = Palette(self)
+
+    # --- 10.0: tool chips under the chat box ----------------------------------
+
+    def _chips_later(self, event=None) -> None:
+        if event is not None and event.keysym in {"Return", "Up", "Down", "Escape"}:
+            return
+        job = getattr(self, "_chips_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._chips_job = self.after(260, self._update_chips)
+
+    def _update_chips(self) -> None:
+        from jarvis import catalog
+        from ui.tenui import setting_on
+
+        self._chips_job = None
+        text = self.chat_input.get()
+        tools = catalog.suggest(text) if setting_on("JARVIS_CHIPS") and not self._busy else []
+        for child in self.chips_row.winfo_children():
+            child.destroy()
+        if not tools:
+            self.chips_row.grid_remove()
+            return
+        ctk.CTkLabel(self.chips_row, text="🧰", text_color=COLORS["muted"]).pack(side="left", padx=(2, 4))
+        for tool in tools:
+            ctk.CTkButton(
+                self.chips_row, text=f"{tool.icon} {tool.label()}", height=24, width=0,
+                font=ctk.CTkFont(size=11), fg_color=COLORS["panel"], hover_color=COLORS["accent_dim"],
+                text_color=COLORS["text"], command=lambda t=tool: self._chip(t),
+            ).pack(side="left", padx=2)
+        self.chips_row.grid()
+
+    def _chip(self, tool) -> None:
+        text = self.chat_input.get().strip()
+        self._hide_chips()
+        if text.startswith("/"):
+            self.prefill_chat(f"/{tool.name} ")
+        else:
+            self.open_tool(tool.name)
+
+    def _hide_chips(self) -> None:
+        row = getattr(self, "chips_row", None)
+        if row is None:
+            return
+        for child in row.winfo_children():
+            child.destroy()
+        row.grid_remove()
 
     # --- modes ------------------------------------------------------------
 
@@ -1303,7 +1467,7 @@ class JarvisApp(EightUI, ctk.CTk):
         try:
             on = self.jarvis.brain.code_mode
             self.code_tab_btn.configure(
-                text="⌨  Code  ●" if on else "⌨  Code",
+                text=f"⌨  {i18n.t('Coding')}  ●" if on else f"⌨  {i18n.t('Coding')}",
                 fg_color=COLORS["accent_dim"] if on else (
                     COLORS["accent_dim"] if self.active_tab == "code" else "transparent"
                 ),
@@ -1324,7 +1488,14 @@ class JarvisApp(EightUI, ctk.CTk):
         self.chat_log.configure(state="normal")
         tag = "user" if is_user else "jarvis"
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        if is_user:
+            avatar = self._avatar_image()
+            if avatar is not None:
+                textbox.image_create("end", image=avatar, padx=4)
+            if sender == "You":
+                sender = self._user_name()
         textbox.insert("end", f"{sender}:\n", tag)
+        start = textbox.index("end-1c")
         if is_user:
             # What you typed is shown exactly as you typed it — markdown in a
             # question is usually punctuation, not formatting.
@@ -1332,6 +1503,8 @@ class JarvisApp(EightUI, ctk.CTk):
         else:
             render.insert(textbox, text, COLORS, on_code=self._code_buttons)
             textbox.insert("end", "\n")
+        # 10.0: the chat style (bubbles, compact, terminal) is a tag over the body.
+        textbox.tag_add("ubody" if is_user else "jbody", start, "end-1c")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
@@ -1479,11 +1652,9 @@ class JarvisApp(EightUI, ctk.CTk):
         what was said, and rewriting history would be worse than a mixed
         window for one session.
         """
-        pairs = (
-            (self.chat_tab_btn, "💬  ", "Chat"),
-            (self.image_tab_btn, "🎨  ", "Image Gen"),
-            (self.code_tab_btn, "⌨  ", "Code"),
-            (self.design_tab_btn, "🖌  ", "Design"),
+        from ui.pages import PAGES
+
+        pairs = tuple((self.nav_buttons[p.key], f"{p.icon}  ", p.label) for p in PAGES) + (
             (self.settings_btn, "⚙  ", "Settings"),
             (self.update_btn, "⟳  ", "Check for Updates"),
             (self.send_btn, "", "Send"),
@@ -1678,7 +1849,8 @@ class JarvisApp(EightUI, ctk.CTk):
         ("Enter", "Send the message"),
         ("Ctrl+F", "Find text in the conversation"),
         ("Ctrl+L", "Jump to the message box"),
-        ("Ctrl+K", "Clear the conversation"),
+        ("Ctrl+K", "Go to any page or tool — type a few letters"),
+        ("Ctrl+Shift+K", "Clear the conversation"),
         ("Ctrl+M", "Next thinking mode"),
         ("Ctrl+D", "Toggle code mode"),
         ("Ctrl+E", "Export the conversation to Markdown"),
@@ -1698,41 +1870,43 @@ class JarvisApp(EightUI, ctk.CTk):
     )
 
     def _bind_shortcuts(self) -> None:
-        bindings = {
-            "<Control-f>": lambda e: self._prompt_find(),
-            "<Control-l>": lambda e: self.chat_input.focus_set(),
-            "<Control-k>": lambda e: self._run_text("/clear"),
-            "<Control-m>": lambda e: self._cycle_mode(),
-            "<Control-d>": lambda e: self._run_text("/code"),
-            "<Control-e>": lambda e: self._run_text("/export"),
-            "<Control-C>": lambda e: self._copy_last(""),
-            "<Control-comma>": lambda e: self._open_settings(),
-            "<Escape>": lambda e: self._stop(),
-            "<Control-o>": lambda e: self._choose_file(),
-            "<Control-b>": lambda e: self._toggle_chat_list(),
-            "<Control-equal>": lambda e: self._zoom(1),
-            "<Control-plus>": lambda e: self._zoom(1),
-            "<Control-minus>": lambda e: self._zoom(-1),
-            "<Control-Key-0>": lambda e: self._zoom(0, reset=True),
-            "<Control-M>": lambda e: self._toggle_mini(),
-            "<Control-L>": lambda e: self._lock_command(""),
-        }
+        """Bind every window shortcut, with the user's own keys (10.0).
+
+        Called again by the shortcut editor, so the old keys are unbound first.
+        """
+        for sequence in getattr(self, "_bound_shortcuts", []):
+            try:
+                self.unbind_all(sequence)
+            except tkinter.TclError:
+                pass
+        self._bound_shortcuts = []
         # Push-to-talk is a press/release pair rather than a toggle, so it
-        # cannot be expressed in the table above.
+        # cannot be expressed in the table.
         try:
             self.bind_all("<KeyPress-F9>", self._ptt_down)
             self.bind_all("<KeyRelease-F9>", self._ptt_up)
         except tkinter.TclError:
             pass
 
-        for sequence, handler in bindings.items():
+        table = [(seq, handler) for _aid, seq, _text, handler in self.shortcut_bindings()]
+        table.append(("<Control-plus>", lambda e: self._zoom(1)))
+        for sequence, handler in table:
             try:
                 # "break" stops Tk also inserting the character into the entry.
                 # Locked means locked: Ctrl+Shift+C would otherwise copy the
                 # last answer out from behind the PIN screen.
                 self.bind_all(sequence, lambda e, h=handler: (None if self._locked else h(e), "break")[1])
+                self._bound_shortcuts.append(sequence)
             except tkinter.TclError:
                 pass
+
+    def shortcut_lines(self) -> list[tuple[str, str]]:
+        fixed = [("Enter", "Send the message"), ("Hold F9", "Push to talk — speak, then release"),
+                 ("Up", "In an empty box: bring back your last message"),
+                 ("Ctrl+Alt+Space", "Quick question from anywhere"),
+                 ("Ctrl+Alt+J", "Bring JARVIS to the front, from anywhere"),
+                 ("Hold Ctrl+Alt+D", "Dictate into any app — speak, release, it types")]
+        return [(seq_label(seq), text) for _aid, seq, text, _h in self.shortcut_bindings()] + fixed
 
     def _run_text(self, text: str) -> None:
         """Fire a command as though it had been typed."""
@@ -1778,11 +1952,14 @@ class JarvisApp(EightUI, ctk.CTk):
             self._show_tab("design")
             return ("The Design page: start from ＋ New, ▦ Templates or AI → “Describe it”. "
                     "Or here: /design a poster for… · /logo … · /orgchart … · /slides …")
-        if name in {"keys", "shortcuts"}:
+        if name in {"keys", "shortcuts"} and args.strip().lower() not in {"edit", "change"}:
             return "Keyboard shortcuts:\n" + "\n".join(
-                f"  {key:<16} {what}" for key, what in self.SHORTCUTS
-            )
-        return self._eight_ui_command(name, args)
+                f"  {key:<16} {what}" for key, what in self.shortcut_lines()
+            ) + "\n\n/shortcuts edit — change any of them."
+        reply = self._eight_ui_command(name, args)
+        if reply is None:
+            reply = self._ten_ui_command(name, args)
+        return reply
 
     def _prompt_find(self) -> None:
         self.chat_input.delete(0, "end")
@@ -2043,6 +2220,10 @@ class JarvisApp(EightUI, ctk.CTk):
         # the finished text as plain characters over the streamed body.
         render.insert(textbox, text, COLORS, on_code=self._code_buttons)
         textbox.insert("end", "\n")
+        try:
+            textbox.tag_add("jbody", "stream_start", "end-1c")
+        except tkinter.TclError:
+            pass
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
         self._last_reply = text
@@ -2054,6 +2235,7 @@ class JarvisApp(EightUI, ctk.CTk):
         if not text:
             return
         self.chat_input.delete(0, "end")
+        self._hide_chips()
         # 8.0: a password to check, a 2FA secret, an app password: asked for
         # in a hidden box and handed straight to the function, never kept in
         # the chat, the history or a prompt.
@@ -2412,6 +2594,15 @@ class JarvisApp(EightUI, ctk.CTk):
 
     def _on_close(self) -> None:
         self._eight_close()
+        try:
+            self._ten_close()
+        except Exception:
+            pass
+        for page in list(getattr(self, "pages", {}).values()):
+            try:
+                page.close()
+            except Exception:
+                pass
         if getattr(self, "_design", None) is not None:
             try:
                 self._design.close()
