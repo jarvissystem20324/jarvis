@@ -79,6 +79,9 @@ def test_every_command_answers_without_arguments(base, deny, offline, monkeypatc
         monkeypatch.setattr(module, "ps_json", lambda *a, **k: [])
     monkeypatch.setattr(shield10, "scan_network", lambda: {"error": "offline in tests"})
     monkeypatch.setattr(shield10, "MPCMD", base / "no-defender.exe")
+    from jarvis import weather
+
+    monkeypatch.setattr(weather, "home_city", lambda: "")      # /wear and /uv would look the city up
     for name in sorted(set(registry.COMMANDS)):
         if name in {"20q", "twentyquestions", "typing", "typingtest"}:
             continue      # these start a game, tested below

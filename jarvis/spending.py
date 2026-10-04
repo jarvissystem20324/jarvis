@@ -262,8 +262,48 @@ def export(path) -> int:
             cell.font = Font(bold=True)
         ws.column_dimensions["A"].width = 18
         ws.column_dimensions["E" if ws is sheet else "C"].width = 28
+    _add_charts(book, grouped, default_currency(entries))
     book.save(str(path))
     return len(entries)
+
+
+def _add_charts(book, grouped: dict[tuple, float], home: str) -> None:
+    """10.0: a Charts sheet — the last twelve months, and this month by category (home currency)."""
+    from openpyxl.chart import BarChart, PieChart, Reference
+    from openpyxl.styles import Font
+
+    per_month: dict[str, float] = {}
+    for (month, currency, _), total in grouped.items():
+        if currency == home:
+            per_month[month] = per_month.get(month, 0) + total
+    if not per_month:
+        return
+    sheet = book.create_sheet("Charts")
+    sheet.append(["Month", f"Total ({home})"])
+    for month in sorted(per_month)[-12:]:
+        sheet.append([month, round(per_month[month], 2)])
+    bars = BarChart()
+    bars.title, bars.y_axis.title = "Spending per month", home
+    bars.add_data(Reference(sheet, min_col=2, min_row=1, max_row=sheet.max_row), titles_from_data=True)
+    bars.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=sheet.max_row))
+    bars.width, bars.height = 18, 9
+    sheet.add_chart(bars, "D2")
+    latest = max(per_month)
+    first = sheet.max_row + 3
+    sheet.cell(first, 1, f"{latest} by category").font = Font(bold=True)
+    rows = sorted(((c, t) for (m, cur, c), t in grouped.items() if m == latest and cur == home), key=lambda x: -x[1])
+    for i, (category, total) in enumerate(rows, first + 1):
+        sheet.cell(i, 1, category)
+        sheet.cell(i, 2, round(total, 2))
+    if rows:
+        pie = PieChart()
+        pie.title = f"{latest} by category"
+        pie.add_data(Reference(sheet, min_col=2, min_row=first + 1, max_row=first + len(rows)))
+        pie.set_categories(Reference(sheet, min_col=1, min_row=first + 1, max_row=first + len(rows)))
+        sheet.add_chart(pie, "D22")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.column_dimensions["A"].width = 22
 
 
 def stamp() -> str:

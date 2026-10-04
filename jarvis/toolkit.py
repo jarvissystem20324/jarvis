@@ -307,6 +307,16 @@ class Toolkit:
         start, end, label = spending.period("month")
         month = spending.totals(entries, start, end).get(entry["currency"], {})
         note = spending.budget_note(entries, entry["currency"])
+        # 10.0: per-category budgets (/budget food 3000) warn at 80% and 100%.
+        from . import alerts, money
+
+        before = month.get(entry["category"], 0.0) - float(entry["amount"])
+        crossed = money.category_alert(entry["category"], before) if entry["currency"] == \
+            spending.default_currency(entries) else ""
+        if crossed:
+            alerts.post(crossed, "Your budgets are on the Money page.", page="money",
+                        kind="error" if crossed.startswith("⚠") else "warn")
+            note = "\n".join(x for x in (note, crossed) if x)
         return (f"💸 {spending.money(entry['amount'], entry['currency'])} · {entry['what']} ({entry['category']}). "
                 f"{label}: {spending.money(sum(month.values()), entry['currency'])}."
                 + (f"\n{note}" if note else "") + "\n/spent for the month · /spent undo")
