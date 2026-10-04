@@ -18,7 +18,7 @@ def inline(monkeypatch):
     from ui.pages import base
 
     class Now:
-        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None, name=None):
             self.target, self.args, self.kwargs = target, args, kwargs or {}
 
         def start(self):

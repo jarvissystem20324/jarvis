@@ -16,6 +16,7 @@ from ..registry import command, field, split
 G = "Music and games"
 _last_stations: list[dict] = []
 _quiz: tuple | None = None          # the emoji puzzle being asked in the chat
+_last_games: list = []              # the last /games list, so /game 2 means its second line
 
 
 def _song_lines(songs: list[Path], limit: int = 10) -> str:
@@ -359,6 +360,181 @@ class Play:
             was, _quiz = _quiz, games.quiz_round(count=1)[0]
             return f"✅ Yes — {was[1]}!\n🤔 Next: {_quiz[0]}   ({_quiz[3]})"
         return f"❌ Not quite. {_quiz[0]} — try again, or /emojiquiz skip."
+
+    # --- gaming -----------------------------------------------------------------------------------
+    @command("games", group=G, usage="/games [search] · /game <name or number>",
+             help="the games installed on this PC (Steam, Epic, GOG)", title="Game library", icon="🎮",
+             page="gaming", fields=(field("search", "text", "Search", optional=True),))
+    def games_cmd(self, args: str, routed: bool = False):
+        global _last_games
+        from .. import gaming
+
+        found = gaming.library()
+        if args.strip():
+            found = gaming.find(found, args)
+        if not found:
+            return "🎮 No games found" + (f" matching {args.strip()!r}." if args.strip() else
+                                         " — Steam, Epic and GOG games show up here once installed.")
+        _last_games = found
+        lines = [f"🎮 {len(found)} game(s) — /game <number> starts one:"]
+        lines += [f"  {i}. {g.name} ({g.source}" + (f", {g.size / 1e9:.1f} GB" if g.size else "") + ")"
+                  for i, g in enumerate(found[:40], 1)]
+        return "\n".join(lines)
+
+    @command("game", "launch", group=G, usage="/game <name or number from /games>", help="starts an installed game",
+             title="Start a game", icon="🕹", page="gaming", fields=(field("name", "text", "Game"),))
+    def game_cmd(self, args: str, routed: bool = False):
+        from .. import gaming
+
+        text = args.strip()
+        if not text:
+            return self.games_cmd("")
+        if text.isdigit() and _last_games and 0 < int(text) <= len(_last_games):
+            chosen = [_last_games[int(text) - 1]]
+        else:
+            chosen = gaming.find(gaming.library(), text)
+        if not chosen:
+            return f"🎮 I can't find {text!r} among your games. /games lists them."
+        if len(chosen) > 1:
+            return "🎮 Which one? " + ", ".join(g.name for g in chosen[:8])
+        try:
+            gaming.launch(chosen[0])
+        except OSError as exc:
+            return f"🎮 Couldn't start {chosen[0].name}: {exc}"
+        return f"🎮 Starting {chosen[0].name} ({chosen[0].source}). Have fun!"
+
+    @command("overlay", group=G, usage="/overlay [on|off]", help="CPU, GPU, RAM and ping on top of your game",
+             title="Performance overlay", icon="📊", page="gaming",
+             fields=(field("state", "choice", "Overlay", "on", ("on", "off")),))
+    def overlay_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        off = args.strip().lower() == "off"
+        return JarvisResponse(text="📊 Overlay " + ("off." if off else "on — top-left of the screen. It shows in "
+                                                                     "windowed and borderless games."),
+                              open_page="gaming:overlay-off" if off else "gaming:overlay-on")
+
+    @command("guide", "gameguide", group=G, usage="/guide <game> | <what you're stuck on>",
+             help="searches guides and wikis and sums up the answer, with sources", title="Game guide search",
+             icon="🗺", page="gaming", fields=(field("game", "text", "Game"), field("question", "text", "Question")))
+    def guide_cmd(self, args: str, routed: bool = False):
+        from .. import shield, websearch
+
+        game, question = split(args, 2)
+        if not game.strip() or not question.strip():
+            return "Usage: /guide Elden Ring | where is the Bloodhound's Fang"
+        try:
+            results = websearch.search(f"{game} {question} guide")
+        except Exception as exc:
+            return f"🗺 The web search failed: {exc}"
+        if not results:
+            return f"🗺 Nothing found for {question!r} in {game}."
+        listing = "\n".join(f"- {r.title}: {r.url}\n  {r.snippet[:300]}" for r in results[:6])
+        wrapped, _ = shield.wrap(listing, "search results")
+        answer = self.brain.ask_once(f"{shield.RULE}\nFrom these search results about the game {game}, answer: "
+                                     f"{question}. Give the steps plainly in 3-8 lines and say which result each "
+                                     f"comes from. If the results don't answer it, say so.\n\n{wrapped}")
+        return f"🗺 {answer.strip()}\n\n" + "\n".join(f"  • {r.url}" for r in results[:4])
+
+    @command("gamesettings", "bestsettings", group=G, usage="/gamesettings <game> [| target fps]",
+             help="the in-game graphics settings that suit this PC", title="Best settings for my PC", icon="⚙",
+             page="gaming", fields=(field("game", "text", "Game"),
+                                     field("fps", "choice", "Aim for", "60", ("60", "144", "30"))))
+    def gamesettings_cmd(self, args: str, routed: bool = False):
+        import psutil
+
+        from .. import gaming
+        from .system import ps_json
+
+        game, fps = split(args, 2)
+        if not game.strip():
+            return "Usage: /gamesettings Cyberpunk 2077 | 60"
+        cpu = next(iter(ps_json("Get-CimInstance Win32_Processor | Select -First 1 Name")), {}).get("Name", "")
+        gpus = ", ".join(f"{d['name']} (driver {d['shown']})" for d in gaming.gpu_drivers()) or "unknown GPU"
+        width, height = gaming.screen_size()
+        specs = (f"CPU: {cpu or 'unknown'}; GPU: {gpus}; RAM: {psutil.virtual_memory().total / 2**30:.0f} GB; "
+                 f"screen: {width}x{height}")
+        answer = self.brain.ask_once(
+            f"Recommend in-game graphics settings for {game.strip()} on this PC, aiming for {fps.strip() or '60'} fps. "
+            f"{specs}. If there are two GPUs, it's a laptop: the game should run on the dedicated one. "
+            "List the settings that matter most (resolution, preset, upscaling, shadows, textures, etc.) with a value "
+            "for each, then one line on what to lower first if it stutters. Be honest if this PC is below the "
+            "game's minimum.")
+        return f"⚙ {specs}\n\n{answer.strip()}"
+
+    @command("gpudriver", "driver", group=G, usage="/gpudriver", help="how old your graphics driver is, and where "
+                                                                        "to update it", title="GPU driver check",
+             icon="🧩", page="gaming")
+    def gpudriver_cmd(self, args: str, routed: bool = False):
+        from .. import gaming
+
+        drivers = gaming.gpu_drivers()
+        if not drivers:
+            return "🧩 Windows didn't report a graphics card."
+        lines = ["🧩 Graphics drivers:"]
+        for d in drivers:
+            age = d["age_days"]
+            when = f"{d['date']:%d %b %Y}" if d["date"] else "unknown date"
+            verdict = ("up to date enough" if age is not None and age < 120 else
+                       f"{age // 30} months old — worth updating" if age is not None else "age unknown")
+            lines.append(f"  {d['name']}: {d['shown']} ({when}) — {verdict}")
+            if age is not None and age >= 120 and d["page"]:
+                lines.append(f"    Get the latest: {d['page']}")
+        lines.append("New drivers often fix crashes and add performance for new games. (JARVIS can't ask the "
+                     "makers for their latest version number, so this goes by the driver's age.)")
+        return "\n".join(lines)
+
+    @command("teams", "teampicker", group=G, usage="/teams <names, comma-separated> [| number of teams]",
+             help="splits players into fair random teams (add skill like ali:5 to balance)",
+             title="Team randomiser", icon="🎲", page="gaming",
+             fields=(field("names", "long", "Players (comma-separated; ali:5 adds a skill)"),
+                     field("teams", "number", "Teams", "2")))
+    def teams_cmd(self, args: str, routed: bool = False):
+        import random
+
+        names_text, count_text = split(args, 2)
+        players = []
+        for part in re.split(r"[,\n;]+", names_text):
+            name, _, skill = part.strip().partition(":")
+            if name.strip():
+                try:
+                    players.append((name.strip(), float(skill) if skill.strip() else None))
+                except ValueError:
+                    players.append((part.strip(), None))
+        count = int(count_text) if count_text.strip().isdigit() else 2
+        if len(players) < 2 or count < 2 or count > len(players):
+            return "Usage: /teams Ali, Ayşe, Mehmet, Zeynep | 2   (add skills to balance: Ali:5, Ayşe:3)"
+        random.shuffle(players)
+        teams: list[list[tuple]] = [[] for _ in range(count)]
+        if any(skill is not None for _, skill in players):
+            # Strongest first, each to the team that is weakest so far: even totals.
+            for player in sorted(players, key=lambda p: -(p[1] or 0)):
+                weakest = min(range(count), key=lambda t: (sum(s or 0 for _, s in teams[t]), len(teams[t])))
+                teams[weakest].append(player)
+        else:
+            for i, player in enumerate(players):
+                teams[i % count].append(player)
+        lines = ["🎲 Teams:"]
+        for i, team in enumerate(teams, 1):
+            total = sum(s or 0 for _, s in team)
+            lines.append(f"  Team {i}: " + ", ".join(n for n, _ in team) + (f"  (skill {total:g})" if total else ""))
+        return "\n".join(lines)
+
+    @command("aimtrainer", "aim", group=G, usage="/aimtrainer", help="click the targets: 30 seconds, best score kept",
+             title="Aim trainer", icon="🎯", page="gaming")
+    def aimtrainer_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        return JarvisResponse(text="🎯 Aim trainer is on the Gaming page.", open_page="gaming:aim")
+
+    @command("keytest", "mousetest", group=G, usage="/keytest", help="test every key and mouse button, and your "
+                                                                       "clicks per second",
+             title="Keyboard and mouse tester", icon="⌨", page="gaming")
+    def keytest_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        return JarvisResponse(text="⌨ The tester is on the Gaming page — press keys and click.",
+                              open_page="gaming:keys")
 
     @command("lyrics", "songwriter", group=G, usage="/lyrics <what it's about> [| genre] [| language]",
              help="writes an original song: verses, chorus, bridge, and chords to play it with",
