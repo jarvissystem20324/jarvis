@@ -69,6 +69,16 @@ def test_every_command_answers_without_arguments(base, deny, offline, monkeypatc
     monkeypatch.setattr(pctools, "wifi_info", lambda: {})
     monkeypatch.setattr(guard, "suspicious_processes", lambda: [])
     monkeypatch.setattr(pc, "known_folder", lambda name: base)
+    # 10.0's commands have their own PowerShell helpers. Left real, a bare
+    # /wifidevices scanned GitHub's network and hung the run for 20 minutes,
+    # and a bare /avscan started a real Defender quick scan on every run.
+    from jarvis.ten import shield10, system
+
+    for module in (system, shield10):
+        monkeypatch.setattr(module, "powershell", lambda *a, **k: "")
+        monkeypatch.setattr(module, "ps_json", lambda *a, **k: [])
+    monkeypatch.setattr(shield10, "scan_network", lambda: {"error": "offline in tests"})
+    monkeypatch.setattr(shield10, "MPCMD", base / "no-defender.exe")
     for name in sorted(set(registry.COMMANDS)):
         if name in {"20q", "twentyquestions", "typing", "typingtest"}:
             continue      # these start a game, tested below

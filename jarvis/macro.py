@@ -57,7 +57,11 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("u", _UNION)]
 
 
-HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+# WINFUNCTYPE exists only on Windows. Defined unconditionally, importing this
+# module failed on macOS, which took the whole Automations page down with it.
+AVAILABLE = hasattr(ctypes, "WINFUNCTYPE")
+HOOKPROC = (ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+            if AVAILABLE else None)
 
 
 class Recorder:
@@ -70,7 +74,7 @@ class Recorder:
         self._last_move = 0.0
 
     def start(self) -> None:
-        if self.recording:
+        if self.recording or not AVAILABLE:
             return
         self.events = []
         self.recording = True
@@ -161,6 +165,10 @@ class Player:
         self._stop.set()
 
     def play(self, events: list[list], speed: float = 1.0, repeat: int = 1, on_done=None) -> None:
+        if not AVAILABLE:  # SendInput is Windows only
+            if on_done is not None:
+                on_done(False)
+            return
         self._stop.clear()
         self.playing = True
         thread = threading.Thread(target=self._run, args=(events, speed, repeat, on_done), daemon=True)

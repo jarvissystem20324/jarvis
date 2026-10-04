@@ -225,18 +225,28 @@ def local_network() -> tuple[str, str] | None:
     return ip, ".".join(ip.split(".")[:3])
 
 
-def ping_sweep(prefix: str, timeout_ms: int = 350) -> None:
-    """Wake every address up so the ARP table fills in (batches of 64 pings)."""
-    procs = []
-    for host in range(1, 255):
-        procs.append(subprocess.Popen(["ping", "-n", "1", "-w", str(timeout_ms), f"{prefix}.{host}"],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW))
-        if len(procs) >= 64:
-            for p in procs:
-                p.wait()
-            procs = []
-    for p in procs:
-        p.wait()
+def wake_network(prefix: str, wait: float = 1.5) -> None:
+    """Make the PC ask every address on the network for its hardware address,
+    so the ARP table fills in.
+
+    One empty UDP packet each (to the discard port, where nothing answers)
+    makes Windows send the ARP request; devices that ignore pings still
+    answer that. It replaced 254 ping processes, which took 25 seconds here.
+    Their Windows-only flags also meant "wait 350 seconds" on Linux, and the
+    test run on GitHub hung on them.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError:
+        return
+    with sock:
+        sock.setblocking(False)
+        for host in range(1, 255):
+            try:
+                sock.sendto(b"", (f"{prefix}.{host}", 9))
+            except OSError:
+                pass
+    time.sleep(wait)
 
 
 def arp_table(prefix: str) -> list[tuple[str, str]]:
@@ -246,10 +256,33 @@ def arp_table(prefix: str) -> list[tuple[str, str]]:
         return []
     found = []
     for line in out.decode("utf-8", "replace").splitlines():
-        m = re.match(r"\s*(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]{17})\s+(\w+)", line)
+        # Windows: "  192.168.1.1   aa-bb-cc-dd-ee-ff   dynamic"; Linux and macOS: "? (192.168.1.1) at aa:bb:…"
+        m = (re.match(r"\s*(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]{17})\s+(\w+)", line) or
+             re.search(r"\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-fA-F:]{17})", line))
         if m and m.group(1).startswith(prefix + ".") and not m.group(1).endswith(".255"):
             found.append((m.group(1), m.group(2).upper().replace("-", ":")))
     return found
+
+
+def device_names(addresses: list[str], deadline: float = 3.0) -> dict[str, str]:
+    """Reverse-DNS names for the addresses, all at once and for at most `deadline` seconds.
+
+    One by one, a network whose DNS doesn't answer for local addresses spent
+    seconds on each, which is where the scan on GitHub's runners hung.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    def lookup(address: str) -> str:
+        try:
+            return socket.gethostbyaddr(address)[0]
+        except (OSError, socket.herror):
+            return ""
+
+    pool = ThreadPoolExecutor(max_workers=32)
+    futures = {pool.submit(lookup, a): a for a in addresses}
+    done, _ = wait(futures, timeout=deadline)
+    pool.shutdown(wait=False, cancel_futures=True)
+    return {futures[f]: f.result() for f in done}
 
 
 def vendor(mac: str) -> str:
@@ -263,16 +296,15 @@ def scan_network() -> dict:
     if local is None:
         return {"error": "Not connected to a local network."}
     ip, prefix = local
-    ping_sweep(prefix)
+    wake_network(prefix)
     gateway = powershell("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | "
                          "Sort-Object RouteMetric | Select -First 1).NextHop", timeout=15)
     known = KNOWN_DEVICES.load()
     devices = []
-    for address, mac in arp_table(prefix):
-        try:
-            name = socket.gethostbyaddr(address)[0]
-        except (OSError, socket.herror):
-            name = ""
+    table = arp_table(prefix)
+    names = device_names([address for address, _ in table])
+    for address, mac in table:
+        name = names.get(address, "")
         devices.append({"ip": address, "mac": mac, "name": name, "vendor": vendor(mac),
                         "new": mac not in known, "label": known.get(mac, {}).get("label", ""),
                         "role": "router" if address == gateway else ""})

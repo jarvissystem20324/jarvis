@@ -19,6 +19,9 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }}
+    # The suite takes a few minutes. A test that hangs (one once scanned the
+    # runner's network) should fail the run, not hold it for six hours.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4

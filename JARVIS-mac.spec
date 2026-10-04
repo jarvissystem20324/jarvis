@@ -47,6 +47,16 @@ try:
 except Exception:
     pass
 
+# The template and data files these packages read at runtime; JARVIS.spec has
+# carried them since 6.0/8.0, and without them every Mac build failed its
+# self-test at "slides" and "design page" (python-pptx's notesMaster.xml).
+for pkg in ("docx", "fpdf", "openpyxl", "pptx", "qrcode", "sympy", "yaml", "edge_tts", "youtube_transcript_api"):
+    try:
+        datas += collect_data_files(pkg)
+        hiddenimports += [pkg]
+    except Exception:
+        pass
+
 # 10.0: the window's pages are imported by name the first time they open
 # (ui/pages/__init__.py), which static analysis cannot see.
 from pathlib import Path

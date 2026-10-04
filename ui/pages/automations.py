@@ -305,6 +305,9 @@ class AutomationsPage(Hub):
         if macro.recorder.recording:
             self._finish_recording(by_click=True)
             return
+        if not macro.AVAILABLE:
+            self.macro_note.configure(text="The macro recorder works on Windows only.")
+            return
         if not security.permissions.ask(security.RUN_COMMAND, "record your mouse and keyboard until you press F10",
                                         context="Macro recorder"):
             return
