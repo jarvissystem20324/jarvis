@@ -1308,6 +1308,22 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
         self.refresh_code_mode()
 
+    def follow_page(self, response) -> None:
+        """Open the page a reply asked for ("arcade:chess"), from the chat or a tool form."""
+        target = getattr(response, "open_page", "") or ""
+        key, _, part = target.partition(":")
+        from ui.pages import BY_KEY
+
+        if key not in BY_KEY:
+            return
+        try:
+            self._show_tab(key)
+            page = self.pages.get(key)
+            if part and page is not None and hasattr(page, "open_target"):
+                page.open_target(part)
+        except Exception:
+            pass
+
     def tool(self, name: str):
         from jarvis import catalog
 
@@ -2346,6 +2362,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
                     self._show_tab("design")
             except Exception:
                 pass
+        self.follow_page(response)
 
         self._after_reply(self._last_input, response.text)
         elapsed = time.monotonic() - getattr(self, "_request_started", time.monotonic())

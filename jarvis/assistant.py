@@ -36,6 +36,9 @@ class JarvisResponse:
     # Design page; show_design also switches to that page.
     design_path: Path | None = None
     show_design: bool = False
+    # 10.0: a page to open, "arcade" or "arcade:chess" (the part after the
+    # colon is handed to the page's open_target). Text-only callers ignore it.
+    open_page: str = ""
 
 
 class Jarvis(Everyday, Extras, Toolkit, Eight):

@@ -15,6 +15,7 @@ from ..registry import command, field, split
 
 G = "Music and games"
 _last_stations: list[dict] = []
+_quiz: tuple | None = None          # the emoji puzzle being asked in the chat
 
 
 def _song_lines(songs: list[Path], limit: int = 10) -> str:
@@ -274,6 +275,90 @@ class Play:
         except Exception:
             target = audiofile.save(audio, music.RATE, target.with_suffix(".wav"))
         return f"🥁 {bars} bars of {style} at {bpm} BPM ({len(audio) / music.RATE:.0f} s):\n{target}"
+
+    # --- the Arcade -----------------------------------------------------------------------------
+    @command("chess", group=G, usage="/chess [easy|medium|hard]", help="chess against JARVIS, on the Arcade page",
+             title="Chess against JARVIS", icon="♟", page="arcade",
+             fields=(field("level", "choice", "Level", "medium", ("easy", "medium", "hard")),))
+    def chess_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        level = args.strip().lower() if args.strip().lower() in {"easy", "medium", "hard"} else ""
+        return JarvisResponse(text=f"♟ Chess is on the Arcade page — you're White{', ' + level if level else ''}. "
+                                   "Click a piece, then where it goes.",
+                              open_page="arcade:chess" + (f"/{level}" if level else ""))
+
+    @command("snake", group=G, usage="/snake", help="Snake, on the Arcade page", title="Snake", icon="🐍",
+             page="arcade")
+    def snake_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        return JarvisResponse(text="🐍 Snake is on the Arcade page — arrow keys to steer, Space to pause.",
+                              open_page="arcade:snake")
+
+    @command("2048", group=G, usage="/2048", help="2048, on the Arcade page", title="2048", icon="🔢",
+             page="arcade")
+    def game2048_cmd(self, args: str, routed: bool = False):
+        from ..assistant import JarvisResponse
+
+        return JarvisResponse(text="🔢 2048 is on the Arcade page — arrow keys slide the tiles.",
+                              open_page="arcade:2048")
+
+    def _word(self, lang: str, args: str) -> str:
+        from .. import games
+
+        game = games.WordGame(lang)
+        guess = args.strip()
+        tr = lang == "tr"
+        if guess:
+            problem = game.guess(guess)
+            if problem:
+                return ("🔤 " + {"Five letters, please.": "Beş harfli bir kelime yaz.",
+                                 "You've tried that one.": "Bunu zaten denedin."}.get(problem, problem)) if tr \
+                    else f"🔤 {problem}"
+        rows = ["  " + " ".join(f"{games.TILES[m]}{letter}" for letter, m in row) for row in game.grid()]
+        head = "🔤 Günün kelimesi" if tr else "🔤 Today's word"
+        if game.won:
+            tail = (f"Bildin! {len(game.guesses)}/6 — seri: {games.streak(lang)} gün." if tr else
+                    f"Got it in {len(game.guesses)}/6 — streak {games.streak(lang)} day(s).")
+        elif game.done:
+            tail = (f"Bitti — kelime {games.upper(game.answer, lang)} idi. Yarın yeni kelime." if tr else
+                    f"Out of guesses — it was {game.answer.upper()}. A new word tomorrow.")
+        else:
+            left = 6 - len(game.guesses)
+            tail = (f"{left} hakkın kaldı. /kelime <tahmin>" if tr else f"{left} guess(es) left. /wordle <guess>")
+        return "\n".join([head] + rows + [tail])
+
+    @command("kelime", group=G, usage="/kelime [tahmin]", help="günün kelime oyunu (Türkçe, 5 harf, 6 hak)",
+             title="Daily word game (Türkçe)", icon="🔤", page="arcade",
+             fields=(field("guess", "text", "Tahmin", optional=True),))
+    def kelime_cmd(self, args: str, routed: bool = False):
+        return self._word("tr", args)
+
+    @command("wordle", group=G, usage="/wordle [guess]", help="the daily word game in English (5 letters, "
+                                                                    "6 tries)", title="Daily word game (English)",
+             icon="🔤", page="arcade", fields=(field("guess", "text", "Guess", optional=True),))
+    def wordle_cmd(self, args: str, routed: bool = False):
+        return self._word("en", args)
+
+    @command("emojiquiz", "emoji", group=G, usage="/emojiquiz · /emojiquiz <answer> · /emojiquiz skip",
+             help="guess the film, series or saying from emojis", title="Emoji quiz", icon="🤔", page="arcade",
+             fields=(field("answer", "text", "Your answer (blank for a new one)", optional=True),))
+    def emojiquiz_cmd(self, args: str, routed: bool = False):
+        from .. import games
+
+        global _quiz
+        answer = args.strip()
+        if not answer or _quiz is None:
+            _quiz = games.quiz_round(count=1)[0]
+            return f"🤔 {_quiz[0]}   ({_quiz[3]})\nWhat is it? /emojiquiz <answer> · /emojiquiz skip"
+        if answer.lower() in {"skip", "pass", "geç", "pas"}:
+            was, _quiz = _quiz, games.quiz_round(count=1)[0]
+            return f"It was: {was[1]}.\n🤔 Next: {_quiz[0]}   ({_quiz[3]})"
+        if games.check_answer(answer, _quiz):
+            was, _quiz = _quiz, games.quiz_round(count=1)[0]
+            return f"✅ Yes — {was[1]}!\n🤔 Next: {_quiz[0]}   ({_quiz[3]})"
+        return f"❌ Not quite. {_quiz[0]} — try again, or /emojiquiz skip."
 
     @command("lyrics", "songwriter", group=G, usage="/lyrics <what it's about> [| genre] [| language]",
              help="writes an original song: verses, chorus, bridge, and chords to play it with",

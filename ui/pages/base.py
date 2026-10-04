@@ -530,6 +530,8 @@ class ResultView(Plain):
             path = Path(raw.strip().rstrip("."))
             if path.exists() and path not in paths:
                 paths.append(path)
+        if getattr(response, "open_page", ""):
+            self.after(10, lambda r=response: self.app.follow_page(r))
         design = getattr(response, "design_path", None)
         if design:
             button(self, "🖌 Open in Design", lambda d=design: self.app.open_design(Path(d)), accent=True).pack(
