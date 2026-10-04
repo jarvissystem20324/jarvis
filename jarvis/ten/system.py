@@ -17,6 +17,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -186,7 +187,15 @@ class Awake:
         self._thread = threading.Thread(target=self._hold, daemon=True, name="jarvis-awake")
         self._thread.start()
 
+    @staticmethod
+    def supported() -> bool:
+        """Windows (SetThreadExecutionState) or macOS (its built-in caffeinate)."""
+        return sys.platform == "win32" or (sys.platform == "darwin" and shutil.which("caffeinate") is not None)
+
     def _hold(self) -> None:
+        if sys.platform == "darwin":
+            self._hold_mac()
+            return
         flags = self.ES_CONTINUOUS | self.ES_SYSTEM | (self.ES_DISPLAY if self.display else 0)
         try:
             ctypes.windll.kernel32.SetThreadExecutionState(flags)
@@ -200,6 +209,18 @@ class Awake:
                 ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
             except AttributeError:
                 pass
+
+    def _hold_mac(self) -> None:
+        try:
+            proc = subprocess.Popen(["caffeinate", "-i"] + (["-d"] if self.display else []))
+        except OSError:
+            return
+        try:
+            while not self._stop.wait(20):
+                if self.until and time.time() >= self.until:
+                    break
+        finally:
+            proc.terminate()
 
     def stop(self) -> None:
         self._stop.set()
@@ -640,6 +661,8 @@ class System:
             awake.stop()
             return "☕ Off — the PC can sleep normally again."
         if not text or text.startswith("on") or re.search(r"\d", text):
+            if not awake.supported():
+                return "☕ Keeping the PC awake works on Windows and macOS."
             m = re.search(r"(\d+(?:\.\d+)?)\s*(h|hour|hours|m|min|minutes)?", text)
             seconds = 0
             if m:

@@ -2,12 +2,13 @@
 
 ocr.py showed the way: Windows 10 and 11 ship engines for things that would
 otherwise mean a large dependency, and PowerShell can call them with nothing
-installed. This module adds three:
+installed. This module adds four:
 
   * Windows.Data.Pdf      — PDF pages as pictures (page thumbnails, placing a
                              signature, importing PDF pages into a design)
   * FaceAnalysis          — where the faces are, to blur them
   * Media.Transcoding     — any audio Windows can play, to WAV / MP3 / M4A
+  * Storage thumbnails    — Explorer's thumbnails, for videos in the gallery
 
 Each runs as one short PowerShell process. Nothing leaves the PC.
 """
@@ -110,6 +111,26 @@ AwaitProgress ($prepared.TranscodeAsync()) ([double])
 '''
 
 
+THUMBS = PRELUDE + r'''
+$null = [Windows.Storage.FileProperties.StorageItemThumbnail, Windows.Storage, ContentType = WindowsRuntime]
+$size = [uint32]$args[2]
+$i = 0
+foreach ($path in [System.IO.File]::ReadAllLines($args[0], [System.Text.Encoding]::UTF8)) {
+    try {
+        $file = OpenFile $path
+        $thumb = Await ($file.GetThumbnailAsync([Windows.Storage.FileProperties.ThumbnailMode]::VideosView, $size)) ([Windows.Storage.FileProperties.StorageItemThumbnail])
+        $target = Join-Path $args[1] ("thumb_{0:D4}.img" -f $i)
+        $in = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead([Windows.Storage.Streams.IInputStream]$thumb)
+        $out = [System.IO.File]::Create($target)
+        $in.CopyTo($out)
+        $out.Close(); $in.Close()
+        "THUMB $i $target"
+    } catch { "SKIP $i" }
+    $i++
+}
+'''
+
+
 class WinRTError(Exception):
     pass
 
@@ -171,6 +192,27 @@ def faces(image: Path) -> list[tuple[int, int, int, int]]:
         if line.startswith("FACE "):
             boxes.append(tuple(int(float(v)) for v in line.split()[1:5]))
     return boxes  # type: ignore[return-value]
+
+
+def thumbnails(files: list[Path], out_dir: Path, size: int = 256) -> dict[Path, Path]:
+    """Explorer's own thumbnails, for videos above all (Pillow can't read them).
+
+    One PowerShell run for the whole list. Files Windows has no thumbnail for
+    are simply missing from the result.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    listing = out_dir / "files.txt"
+    files = [Path(f).resolve() for f in files]
+    listing.write_text("\n".join(str(f) for f in files), encoding="utf-8")
+    out = run(THUMBS, str(listing), str(out_dir.resolve()), str(size), name="thumbs", timeout=30 + 3 * len(files))
+    found = {}
+    for line in out.splitlines():
+        if line.startswith("THUMB "):
+            _, index, target = line.split(" ", 2)
+            if 0 <= int(index) < len(files):
+                found[files[int(index)]] = Path(target.strip())
+    return found
 
 
 def transcode(source: Path, target: Path) -> Path:

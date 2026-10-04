@@ -86,7 +86,8 @@ def test_a_page_that_cannot_open_says_why(app, monkeypatch):
 
     monkeypatch.setattr(pages, "page_class", missing)
     assert "No module named 'ui.pages.home'" in pages.make("home", app.content, app).subtitle
-    assert "still being built" in pages.make("media", app.content, app).subtitle
+    for unfinished in sorted(pages.STILL_BUILDING)[:1]:
+        assert "still being built" in pages.make(unfinished, app.content, app).subtitle
 
     class Broken(Hub):
         def build_body(self):

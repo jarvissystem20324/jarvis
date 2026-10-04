@@ -62,6 +62,9 @@ def test_winget_table_parsing():
 def test_keep_awake_starts_and_stops():
     from jarvis.ten import system
 
+    if not system.awake.supported():
+        assert "Windows and macOS" in system.System().awake_cmd("on")
+        return
     system.awake.start(0)
     assert system.awake.on
     system.awake.stop()
