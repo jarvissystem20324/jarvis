@@ -318,6 +318,22 @@ def selftest() -> int:
     check("file encryption", _crypto)
     check("8.0 commands", _eight)
     check("10.0 pages", _pages)
+
+    def _unpacked() -> str:
+        # Temp gets emptied under a running program by Storage Sense and
+        # friends; JARVIS.spec unpacks the one-file EXE elsewhere for that.
+        import tempfile
+        from pathlib import Path
+
+        bundle = getattr(sys, "_MEIPASS", "")
+        if not bundle:
+            return "running from source"
+        temp = Path(tempfile.gettempdir()).resolve()
+        if Path(bundle).resolve().is_relative_to(temp):
+            raise RuntimeError(f"unpacked into Temp ({bundle}), where cleaners delete it while JARVIS runs")
+        return bundle
+
+    check("unpacked outside Temp", _unpacked)
     check("power controls", lambda: "shutdown.exe present" if __import__("shutil").which("shutdown") else "not on this platform")
 
     from jarvis import config as _cfg

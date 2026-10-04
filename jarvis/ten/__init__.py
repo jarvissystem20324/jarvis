@@ -61,6 +61,15 @@ def stop() -> None:
         phone_mod().stop_server()
     except Exception:
         pass
+    import sys
+
+    music = sys.modules.get("jarvis.music")     # only if something played; no need to import it to stop it
+    if music is not None:
+        try:
+            music.player.shutdown()
+            music.drums.stop()
+        except Exception:
+            pass
 
 
 def system_mod():

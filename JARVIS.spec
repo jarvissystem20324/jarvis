@@ -108,7 +108,12 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    # Unpack beside the install, not in %TEMP%. Storage Sense, Disk Cleanup
+    # and antivirus cleaners empty Temp while programs run: on a nearly full
+    # disk they deleted the running app's certificate bundle, and every AI
+    # provider failed with "[Errno 2] No such file or directory". The
+    # bootloader expands %LOCALAPPDATA% itself; the folder is removed on exit.
+    runtime_tmpdir="%LOCALAPPDATA%\\JARVIS\\runtime",
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
