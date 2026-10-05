@@ -402,6 +402,13 @@ def _fire(widget, sequence: str) -> None:
     widget.update()
 
 
+def _steady(page) -> None:
+    """The same zoom on any screen. A CI runner's small screen shows the page tiny, so a short
+    drag is a pixel or two and snapping (a few screen pixels) reaches much further."""
+    page.set_zoom(0.6 / page._fit_scale())
+    page.update()
+
+
 def _screen(page, x, y):
     cx, cy = page._to_canvas(x, y)
     return int(cx - page.canvas.canvasx(0)), int(cy - page.canvas.canvasy(0))
@@ -429,6 +436,7 @@ def _click(page, x, y, state=0):
 @gui
 def test_select_several_group_move_and_copy(page):
     page.load(templates.blank("slides"))
+    _steady(page)
     a = page.add_shape("rect")
     model.move(a, -500, -250)
     b = page.add_shape("ellipse")
@@ -471,6 +479,7 @@ def test_select_several_group_move_and_copy(page):
 @gui
 def test_rulers_guides_snapping_and_the_pen(page):
     page.load(templates.blank("slides"))
+    _steady(page)
     assert page.ruler_top.find_all() and page.ruler_left.find_all()
     page._ruler_press("v")
     x0 = page.canvas.winfo_rootx() + _screen(page, 700, 300)[0]

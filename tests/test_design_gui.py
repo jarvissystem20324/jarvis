@@ -80,6 +80,9 @@ def test_the_design_page_opens_from_the_sidebar(app, page):
 
 
 def test_add_select_drag_resize_rotate_and_undo(page):
+    # A fixed zoom: on a CI runner's small screen the page is tiny, and 10.0's snapping
+    # (a few screen pixels) then reaches far enough to pull this 200 px drag onto the centre line.
+    page.set_zoom(0.6 / page._fit_scale())
     el = page.add_shape("rect")
     start = (el["x"], el["y"], el["w"], el["h"])
     cx, cy = model.center(el)
