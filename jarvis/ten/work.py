@@ -394,7 +394,7 @@ class Work:
         return text
 
     @command("meeting", "minutes", group=G, usage="/meeting <notes or transcript, or a file>",
-             help="meeting notes: summary, decisions and action items", title="Meeting notes", icon="🧑‍🤝‍🧑",
+             help="meeting notes: summary, decisions and action items", title="Meeting notes", icon="🧑\u200d🤝\u200d🧑",
              page="today", fields=(field("notes", "long", "Notes or transcript (or a file path)"),))
     def meeting(self, args: str, routed: bool = False):
         text = args.strip()
@@ -415,7 +415,7 @@ class Work:
         if not isinstance(data, dict):
             return "I couldn't structure those notes — try again with a little more text."
         self._last_meeting = data
-        lines = [f"🧑‍🤝‍🧑 {data.get('title') or 'Meeting'}", "", "Summary:"]
+        lines = [f"🧑\u200d🤝\u200d🧑 {data.get('title') or 'Meeting'}", "", "Summary:"]
         lines += [f"  • {s}" for s in data.get("summary", [])]
         if data.get("decisions"):
             lines += ["", "Decisions:"] + [f"  ✔ {d}" for d in data["decisions"]]

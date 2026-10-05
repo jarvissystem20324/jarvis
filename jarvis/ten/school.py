@@ -1116,7 +1116,7 @@ class School:
     # --- teachers --------------------------------------------------------------------------------
     @command("lessonplan", group=G, usage="/lessonplan <subject, grade, topic, minutes>",
              help="a lesson plan with objectives and timed activities (Word)", title="Teacher: lesson plan",
-             icon="👩‍🏫", page="study", fields=(field("about", "text", "Subject, grade, topic, minutes",
+             icon="👩\u200d🏫", page="study", fields=(field("about", "text", "Subject, grade, topic, minutes",
                                                     "Science, 6th grade, the water cycle, 40 minutes"),))
     def lessonplan_cmd(self, args: str, routed: bool = False):
         return self.make_document(

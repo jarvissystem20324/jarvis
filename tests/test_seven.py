@@ -169,13 +169,14 @@ def test_the_scanner_finds_trojan_source():
 
 def test_jarvis_source_has_no_hidden_characters():
     """6.0 shipped nine raw bidi and zero-width characters inside a regex in
-    shield.py. They worked, but source code must say what it runs."""
+    shield.py. They worked, but source code must say what it runs. (10.0: the
+    subfolders too — emoji like 👨\u200d🍳 hide a joiner, written "\\u200d".)"""
     root = Path(__file__).resolve().parent.parent
     hidden = scanner._HIDDEN
     for folder in ("jarvis", "addons", "ui", "tests"):
-        for path in (root / folder).glob("*.py"):
+        for path in (root / folder).rglob("*.py"):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                assert not hidden.search(line), f"{path.name}:{number}"
+                assert not hidden.search(line), f"{path.relative_to(root)}:{number}"
 
 
 # --- test runners ---------------------------------------------------------------------------

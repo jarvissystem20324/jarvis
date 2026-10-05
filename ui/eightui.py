@@ -25,20 +25,20 @@ from jarvis import eight
 
 STOP_LISTENING = re.compile(r"\b(stop listening|stop hands[- ]free|that'?s all|goodbye jarvis|dinlemeyi bırak|görüşürüz)\b", re.I)
 TOUR = [
-    ("Welcome to JARVIS 9.0", "Type or talk to me like a person. Most things don't need a command:\n"
+    ("Welcome to JARVIS 10.0", "Type or talk to me like a person. Most things don't need a command:\n"
      "“pause music”, “remind me every day at 9 to take vitamins”, “gold price”, “flip a coin”."),
-    ("New: the Design page", "🖌 Design in the sidebar: slides, posters, thumbnails, logos, cards, menus, invitations\n"
-     "and diagrams. Drag things around, or ask: “make the title bigger”. Try ▦ Templates or AI → Describe it."),
-    ("Make things", "Slides, CVs, cover letters, dilekçe, invoices, mind maps, flowcharts, memes and websites.\n"
-     "Try: “make a presentation about renewable energy”."),
-    ("Study", "Quizzes, flashcards with spaced review, a language tutor, exact algebra, dictionary and Wikipedia.\n"
-     "Try: /quiz photosynthesis   ·   /solve x^2-5x+6=0   ·   /tutor spanish A2"),
-    ("Your day", "A to-do list, repeating and medicine reminders, a calendar, prayer times, earthquakes, gold, crypto,\n"
-     "the news and alerts when a price crosses a line. Try: “what's on my list”."),
-    ("Your PC and safety", "Duplicates, PDF tools, conversions, startup apps, dark mode, AI wallpapers, screen time;\n"
-     "password and link checks, 2FA codes and file encryption. Secrets go in hidden boxes, never the chat."),
-    ("Talk to me", "Press 🎧 Hands-free and just talk; say “stop listening” to end. /persona coach changes how I speak.\n"
-     "/help lists everything. This tour: /tour."),
+    ("Everything is in the window", "The sidebar has a page for each part of JARVIS: Home, Today, Coding, Study, "
+     "Security,\nMusic, Gaming, Travel, Phone and more. Tools holds every command as a tile; Ctrl+K finds anything."),
+    ("Design", "🖌 Design: slides, posters, CVs, tickets, carousels and diagrams, with charts, a pen and AI rewriting.\n"
+     "▶ Show presents your slides full screen, with a presenter view for your notes."),
+    ("Make and study", "Word, PDF and Excel from a description; quizzes, flashcards, a tutor, exact algebra and\n"
+     "practice tests from your notes. Try: “make a presentation about renewable energy”."),
+    ("Your day", "Tasks, reminders, a calendar, goals, notes and your inbox, plus prayer times, weather, traffic\n"
+     "and prices. Try: “what's on my list”."),
+    ("Your PC and safety", "Live PC graphs, cleanup and winget installs; a security score, who's on your Wi-Fi and\n"
+     "antivirus scans on Windows Defender. Secrets go in hidden boxes, never the chat."),
+    ("Talk to me", "Press 🎧 Hands-free and just talk; say “stop listening” to end. Hold Ctrl+Alt+V to talk\n"
+     "from any app. /help lists everything. This tour: /tour."),
 ]
 
 

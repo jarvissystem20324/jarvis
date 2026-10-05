@@ -138,20 +138,29 @@ speak, let go, and the words are typed where your cursor is.
 six sample rows, answers with a small query, and JARVIS runs that query
 itself — so a sum is a sum, not an estimate.
 
-## 10.0 preview (9.9.0)
-
-A preview of 10.0, about 170 of its 282 features. It is released as a GitHub pre-release, so installed copies don't update to it on their own.
+## What's new in 10.0 — 282 features, all of them in the window
 
 - **Every command is in the window.** The Tools page has a tile and a form for each command; Ctrl+K jumps to any page or tool; suggestions appear under the chat box. (Clear chat moved to Ctrl+Shift+K.)
 - **New pages:**
-  - Home, Coding (an IDE-style page), Documents, Study;
-  - Today, Calendar, Notes, Inbox;
-  - PC, Security, Antivirus (Microsoft Defender's engine), Automations;
-  - Memory, Voice.
+  - Home, Today, Calendar, Notes, Inbox, Memory;
+  - Coding (an IDE: file tree, editor, run, terminal and the agent), Documents, Study;
+  - PC, Security, Antivirus (Microsoft Defender's engine), Automations, Voice;
+  - Media, Music, Creator, Gaming, Arcade;
+  - Everyday, Health, Money, Travel, Map, Türkiye, Phone.
+- **Design page 2.0:**
+  - charts with an editable data table; a pen; pattern fills; text outlines, shadows and curved text;
+  - select several things (Shift+click or a box), group, align; rulers and guides with snapping;
+  - ▶ Show presents full screen with transitions and entrance animations, or with a presenter view
+    (notes, the next slide, a timer); both carry over to PowerPoint;
+  - AI rewrite, find and replace, spell check (Windows' own checker, Turkish too), white-background removal,
+    an emoji picker;
+  - slides from an Excel table, a PDF's pages, a design from a photo of a sketch;
+  - templates for CVs, book covers, event tickets, infographics, Instagram carousels and calendar pages.
+  - From the chat: `/slideshow`, `/excelslides`, `/pdfdesign`, `/sketch`, `/cvdesign`, `/bookcover`,
+    `/ticket`, `/infographic`, `/carousel`, `/calendarpage`, `/spellcheck`, `/removebg`.
 - **Look and feel:**
   - HUD and Iron Man themes, accent colour, chat styles, a floating orb, a status bar, corner notifications;
   - Ctrl+Alt+R works on selected text in any app; hold Ctrl+Alt+V to talk to JARVIS from any app.
-- **Still being built:** Design 2.0, Media, Music, Creator, Gaming, Arcade, Everyday, Health, Money, Travel, Map, Türkiye, Phone. These pages say so; their commands still work from the chat and the Tools page.
 
 ## What's new in 9.0 — the Design page
 

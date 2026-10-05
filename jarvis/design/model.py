@@ -41,20 +41,31 @@ FORMATS: dict[str, tuple[str, int, int]] = {
     "banner": ("X / LinkedIn banner", 1500, 500),
     "facebook": ("Facebook post", 1200, 630),
     "diagram": ("Diagram 16:9", 1920, 1080),
+    "book": ("Book cover (6×9 in)", 1200, 1800),
+    "ticket": ("Event ticket", 1800, 700),
+    "infographic": ("Infographic (tall)", 1080, 2400),
 }
-TYPES = ("text", "shape", "line", "image", "icon", "table")
+TYPES = ("text", "shape", "line", "image", "icon", "table", "chart", "path")
 SHAPES = ("rect", "round", "ellipse", "triangle", "diamond", "pentagon", "hexagon", "star", "burst",
           "arrow", "chevron", "plus", "heart", "bubble", "ribbon")
 FILTERS = ("none", "grayscale", "sepia", "vintage", "blur", "bright", "dark", "contrast", "vivid",
            "cool", "warm", "invert", "sharpen")
-COMMON = {"x": 0.0, "y": 0.0, "w": 200.0, "h": 100.0, "rot": 0.0, "opacity": 1.0, "locked": False, "role": ""}
+CHARTS = ("bar", "hbar", "line", "area", "pie", "doughnut")
+PATTERNS = ("none", "stripes", "dots", "grid", "checks", "lines", "waves")
+# What an element does when its slide is shown (PowerPoint entrance effects), and how a slide arrives.
+ANIMS = ("none", "appear", "fade", "fly", "zoom", "wipe")
+TRANSITIONS = ("none", "fade", "push", "wipe", "split", "cover", "zoom")
+COMMON = {"x": 0.0, "y": 0.0, "w": 200.0, "h": 100.0, "rot": 0.0, "opacity": 1.0, "locked": False, "role": "",
+          "group": "", "anim": "none"}
+SAMPLE_CHART = [["", "2025", "2026"], ["Q1", "12", "15"], ["Q2", "18", "21"], ["Q3", "9", "14"], ["Q4", "16", "24"]]
 DEFAULTS: dict[str, dict] = {
     "text": {"text": "Text", "font": "Segoe UI", "size": 48.0, "color": "#1f2430", "bold": False, "italic": False,
              "underline": False, "align": "left", "valign": "top", "line": 1.15, "fill": None, "radius": 0.0,
-             "pad": 0.0, "autofit": False, "stroke": None, "stroke_w": 0.0, "shadow": False},
+             "pad": 0.0, "autofit": False, "stroke": None, "stroke_w": 0.0, "shadow": False, "curve": 0.0},
     "shape": {"shape": "rect", "fill": "#4f8ef7", "stroke": None, "stroke_w": 0.0, "radius": 24.0, "shadow": False,
               "text": "", "font": "Segoe UI", "size": 36.0, "color": "#ffffff", "bold": False, "italic": False,
-              "underline": False, "align": "center", "valign": "middle", "line": 1.1, "autofit": True},
+              "underline": False, "align": "center", "valign": "middle", "line": 1.1, "autofit": True,
+              "pattern": "none", "pattern_color": "#ffffff", "pattern_size": 28.0},
     "line": {"stroke": "#1f2430", "stroke_w": 6.0, "arrow": "none", "dash": False},
     "image": {"src": "", "fit": "cover", "crop": [0.0, 0.0, 0.0, 0.0], "filter": "none", "flip_h": False,
               "flip_v": False, "radius": 0.0, "circle": False, "stroke": None, "stroke_w": 0.0, "shadow": False},
@@ -62,15 +73,22 @@ DEFAULTS: dict[str, dict] = {
     "table": {"rows": [["Column 1", "Column 2"], ["", ""]], "header": True, "font": "Segoe UI", "size": 28.0,
               "color": "#1f2430", "fill": "#4f8ef7", "header_color": "#ffffff", "stripe": "#f1f5f9",
               "border": "#cbd5e1", "bg": "#ffffff", "align": "left"},
+    # The first row names the series; each row after it is a label and its numbers.
+    "chart": {"chart": "bar", "rows": SAMPLE_CHART, "title": "", "font": "Segoe UI", "size": 26.0,
+              "color": "#1f2430", "fill": "#4f8ef7", "legend": True, "labels": False},
+    # A pen stroke: points as fractions of the element's box, so moving and resizing just work.
+    "path": {"points": [[0.0, 0.0], [1.0, 1.0]], "stroke": "#1f2430", "stroke_w": 8.0, "fill": None,
+             "closed": False, "smooth": True},
 }
 # What "copy style" carries: everything but where it is, what it says and what it is.
 NOT_STYLE = {"id", "type", "x", "y", "w", "h", "rot", "text", "src", "glyph", "rows", "crop", "locked", "role",
-             "shape", "set"}
-COLOR_KEYS = {"color", "fill", "stroke", "header_color", "stripe", "border", "bg"}
+             "shape", "set", "group", "points", "chart", "title"}
+COLOR_KEYS = {"color", "fill", "stroke", "header_color", "stripe", "border", "bg", "pattern_color"}
 NULLABLE = {"fill", "stroke"}
 CHOICES = {"align": ("left", "center", "right"), "valign": ("top", "middle", "bottom"),
            "arrow": ("none", "end", "start", "both"), "fit": ("cover", "contain", "stretch"),
-           "set": ("color", "mono"), "shape": SHAPES, "filter": FILTERS}
+           "set": ("color", "mono"), "shape": SHAPES, "filter": FILTERS, "chart": CHARTS, "pattern": PATTERNS,
+           "anim": ANIMS}
 
 
 class DesignError(Exception):
@@ -176,6 +194,19 @@ def table(rows: list[list[str]], x, y, w, h, **props) -> dict:
     return element("table", rows=rows, x=x, y=y, w=w, h=h, **props)
 
 
+def chart(kind: str, rows: list[list[str]], x, y, w, h, **props) -> dict:
+    return element("chart", chart=kind, rows=rows, x=x, y=y, w=w, h=h, **props)
+
+
+def path(points: list[tuple[float, float]], **props) -> dict:
+    """A pen stroke from points in page pixels."""
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    left, top = min(xs), min(ys)
+    w, h = max(1.0, max(xs) - left), max(1.0, max(ys) - top)
+    return element("path", x=left, y=top, w=w, h=h,
+                   points=[[(px - left) / w, (py - top) / h] for px, py in points], **props)
+
+
 def add(design: dict, page: dict | int, el: dict, index: int | None = None) -> dict:
     page = design["pages"][page] if isinstance(page, int) else page
     design["seq"] = int(design.get("seq", 0)) + 1
@@ -231,7 +262,8 @@ def clean_value(type_: str, key: str, value, current=None):
         return value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
     if isinstance(base, float):
         limits = {"opacity": (0.0, 1.0), "size": (4.0, 2000.0), "line": (0.6, 3.0), "stroke_w": (0.0, 200.0),
-                  "radius": (0.0, 5000.0), "pad": (0.0, 500.0), "rot": (-3600.0, 3600.0)}.get(key, (None, None))
+                  "radius": (0.0, 5000.0), "pad": (0.0, 500.0), "rot": (-3600.0, 3600.0),
+                  "curve": (-360.0, 360.0), "pattern_size": (4.0, 400.0)}.get(key, (None, None))
         number = _number(value, float(default) if isinstance(default, (int, float)) else base, *limits)
         return number % 360 if key == "rot" else number
     if key == "crop":
@@ -246,7 +278,13 @@ def clean_value(type_: str, key: str, value, current=None):
         rows = [[str(c) for c in row] if isinstance(row, list) else [str(row)] for row in value][:40]
         width = max((len(r) for r in rows), default=1)
         return [r + [""] * (width - len(r)) for r in rows] or [[""]]
-    if key in {"text", "glyph", "src", "font", "role", "id"}:
+    if key == "points":
+        try:
+            points = [[max(0.0, min(1.0, float(p[0]))), max(0.0, min(1.0, float(p[1])))] for p in value][:4000]
+        except (TypeError, ValueError, IndexError):
+            return default
+        return points if len(points) >= 2 else default
+    if key in {"text", "glyph", "src", "font", "role", "id", "group", "title"}:
         return "" if value is None else str(value)[:4000 if key == "text" else 400]
     return value
 
@@ -280,12 +318,18 @@ def normalize(design: dict) -> dict:
     fonts = design.get("fonts")
     if isinstance(fonts, dict):
         out["fonts"] = {k: str(v)[:80] for k, v in fonts.items() if k in {"heading", "body"} and v}
+    guides = design.get("guides")
+    if isinstance(guides, dict):
+        out["guides"] = {axis: [_number(v, 0.0) for v in guides.get(axis) or [] if isinstance(v, (int, float))][:40]
+                         for axis in ("v", "h")}
     for page in design.get("pages") or [{}]:
         if not isinstance(page, dict):
             continue
         clean = {"bg": color(page.get("bg"), "#ffffff"), "notes": str(page.get("notes") or ""), "elements": []}
         if page.get("layout"):
             clean["layout"] = str(page["layout"])[:40]
+        if page.get("transition") in TRANSITIONS[1:]:
+            clean["transition"] = page["transition"]
         for el in page.get("elements") or []:
             try:
                 clean["elements"].append(clean_element(el))
@@ -377,12 +421,141 @@ def delete_page(design: dict, index: int) -> int:
     return max(0, min(index, len(design["pages"]) - 1))
 
 
-def duplicate(design: dict, page: dict, el: dict, offset: float = 30) -> dict:
+def duplicate(design: dict, page: dict, el: dict, offset: float = 30, group: str = "") -> dict:
+    """A copy just after the original. It leaves the original's group unless given one."""
     copy = clone(el)
     copy["x"] += offset
     copy["y"] += offset
     copy["locked"] = False
+    copy["group"] = group
     return add(design, page, copy, page["elements"].index(el) + 1)
+
+
+# --- groups --------------------------------------------------------------------------------------
+
+def new_group_id(design: dict) -> str:
+    design["seq"] = int(design.get("seq", 0)) + 1
+    return f"g{design['seq']}"
+
+
+def group_members(page: dict, group_id: str) -> list[dict]:
+    return [e for e in page.get("elements", []) if group_id and e.get("group") == group_id]
+
+
+def make_group(design: dict, page: dict, elements: list[dict]) -> str:
+    """Group elements: they move and select together, and export as one PowerPoint group.
+    Members are gathered next to each other in the stacking order (where the topmost one was),
+    which a PowerPoint group needs."""
+    members = [e for e in page["elements"] if any(e is m for m in elements)]
+    if len(members) < 2:
+        return ""
+    group_id = new_group_id(design)
+    top = max(page["elements"].index(e) for e in members)
+    rest = [e for e in page["elements"] if not any(e is m for m in members)]
+    below = sum(1 for e in page["elements"][:top + 1] if not any(e is m for m in members))
+    page["elements"] = rest[:below] + members + rest[below:]
+    for el in members:
+        el["group"] = group_id
+    return group_id
+
+
+def ungroup(elements: list[dict]) -> int:
+    count = 0
+    for el in elements:
+        if el.get("group"):
+            el["group"] = ""
+            count += 1
+    return count
+
+
+def union_box(elements: list[dict]) -> tuple[float, float, float, float]:
+    boxes = [bbox(e) for e in elements]
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def align(elements: list[dict], how: str, page_size: tuple[float, float] | None = None) -> None:
+    """left | center | right | top | middle | bottom — to the selection's box, or the page's
+    when only one thing is selected; hspace | vspace spread them out evenly."""
+    if not elements:
+        return
+    if len(elements) == 1 and page_size:
+        box = (0.0, 0.0, float(page_size[0]), float(page_size[1]))
+    else:
+        box = union_box(elements)
+    if how in {"hspace", "vspace"}:
+        axis = 0 if how == "hspace" else 1
+        items = sorted(elements, key=lambda e: bbox(e)[axis])
+        if len(items) < 3:
+            return
+        sizes = [bbox(e)[axis + 2] - bbox(e)[axis] for e in items]
+        gap = ((box[axis + 2] - box[axis]) - sum(sizes)) / (len(items) - 1)
+        pos = box[axis]
+        for el, size in zip(items, sizes):
+            el["xy"[axis]] += pos - bbox(el)[axis]
+            pos += size + gap
+        return
+    for el in elements:
+        left, top, right, bottom = bbox(el)
+        if how == "left":
+            el["x"] += box[0] - left
+        elif how == "right":
+            el["x"] += box[2] - right
+        elif how == "center":
+            el["x"] += (box[0] + box[2]) / 2 - (left + right) / 2
+        elif how == "top":
+            el["y"] += box[1] - top
+        elif how == "bottom":
+            el["y"] += box[3] - bottom
+        elif how == "middle":
+            el["y"] += (box[1] + box[3]) / 2 - (top + bottom) / 2
+
+
+# --- words: find and replace ------------------------------------------------------------------------
+
+def _pattern(query: str, case: bool, whole: bool = False) -> re.Pattern:
+    body = re.escape(query)
+    if whole:
+        body = rf"(?<!\w){body}(?!\w)"
+    return re.compile(body, 0 if case else re.IGNORECASE)
+
+
+def find_text(design: dict, query: str, case: bool = False) -> list[tuple[int, str]]:
+    """(page index, element id) of every element whose words contain the query."""
+    if not query:
+        return []
+    pattern = _pattern(query, case)
+    out = []
+    for index, page in enumerate(design["pages"]):
+        for el in page["elements"]:
+            texts = [el.get("text", ""), el.get("title", "")] + [c for row in el.get("rows") or [] for c in row]
+            if any(isinstance(t, str) and pattern.search(t) for t in texts):
+                out.append((index, el["id"]))
+    return out
+
+
+def replace_text(design: dict, query: str, replacement: str, case: bool = False, notes: bool = True) -> int:
+    """Replace every match on every page (words, table and chart cells, chart titles, speaker notes)."""
+    if not query:
+        return 0
+    pattern = _pattern(query, case)
+    total = 0
+
+    def sub(value: str) -> str:
+        nonlocal total
+        new, count = pattern.subn(lambda m: replacement, value)
+        total += count
+        return new
+
+    for page in design["pages"]:
+        for el in page["elements"]:
+            for key in ("text", "title"):
+                if isinstance(el.get(key), str) and el[key]:
+                    el[key] = sub(el[key])
+            if el.get("rows"):
+                el["rows"] = [[sub(c) for c in row] for row in el["rows"]]
+        if notes and page.get("notes"):
+            page["notes"] = sub(page["notes"])
+    return total
 
 
 def arrange(page: dict, el: dict, where: str) -> None:
@@ -417,6 +590,8 @@ def page_text(page: dict) -> str:
             parts.append(el["text"].strip())
         elif el["type"] == "table":
             parts += [" | ".join(row) for row in el["rows"]]
+        elif el["type"] == "chart":
+            parts.append(f"[chart] {el.get('title', '')}".strip())
     return "\n".join(parts)
 
 
@@ -427,11 +602,11 @@ def summary(page: dict) -> list[dict]:
         item = {"id": el["id"], "type": el["type"], "x": round(el["x"]), "y": round(el["y"]),
                 "w": round(el["w"]), "h": round(el["h"])}
         for key in ("role", "text", "shape", "font", "size", "color", "fill", "bold", "align", "glyph", "rot",
-                    "opacity", "filter"):
+                    "opacity", "filter", "chart", "title", "curve", "group"):
             value = el.get(key)
             if key in el and (value not in ("", None, False, 0, 0.0) or key in {"color", "fill"}):
                 item[key] = value[:200] if isinstance(value, str) else (round(value, 2) if isinstance(value, float) else value)
-        if el["type"] == "table":
+        if el["type"] in {"table", "chart"}:
             item["rows"] = el["rows"][:8]
         out.append(item)
     return out
@@ -464,12 +639,24 @@ def assets_dir() -> Path:
 def import_asset(path: str | Path) -> str:
     """Copy a picture into assets/ (named by its content, so twice is once). Returns 'assets/<name>'."""
     source = Path(path)
-    data = source.read_bytes()
-    name = hashlib.sha1(data).hexdigest()[:16] + (source.suffix.lower() or ".png")
+    return asset_bytes(source.read_bytes(), source.suffix.lower() or ".png")
+
+
+def asset_bytes(data: bytes, suffix: str = ".png") -> str:
+    name = hashlib.sha1(data).hexdigest()[:16] + suffix
     target = assets_dir() / name
     if not target.exists():
         target.write_bytes(data)
     return f"assets/{name}"
+
+
+def asset_image(image) -> str:
+    """A Pillow picture filed under assets/ as a PNG. Returns its src."""
+    import io
+
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    return asset_bytes(buffer.getvalue(), ".png")
 
 
 def resolve_src(src: str) -> Path | None:

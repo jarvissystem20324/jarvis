@@ -606,7 +606,7 @@ class EmojiQuiz(_Game):
         try:
             from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-            glyphs = emojis.replace("️", "").replace("‍", "")
+            glyphs = emojis.replace("️", "").replace("\u200d", "")
             font = ImageFont.truetype(str(_EMOJI_FONT), 56)
             probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
             left, top, right, bottom = probe.textbbox((0, 0), glyphs, font=font, embedded_color=True)

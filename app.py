@@ -293,6 +293,33 @@ def selftest() -> int:
             raise RuntimeError("PowerPoint round trip lost slides")
         return f"{len(items)} templates, PowerPoint round trip ok, {len(fonts.families())} font families"
 
+    def _design2() -> str:
+        # 10.0's Design 2.0: charts, pen strokes, curved text, groups, animations and the slideshow.
+        from pathlib import Path
+        import tempfile
+
+        from jarvis import spelling
+        from jarvis.design import extras, model, pptxio, render  # noqa: F401  (imported as the page does)
+        import ui.design_show  # noqa: F401
+        import ui.design_tools  # noqa: F401
+
+        design = model.new_design("slides", "slides", "Self test")
+        page = design["pages"][0]
+        page["transition"] = "fade"
+        a = model.add(design, page, model.chart("pie", model.SAMPLE_CHART, 0, 0, 600, 400, anim="fade"))
+        b = model.add(design, page, model.path([(700, 100), (900, 300), (1100, 120)], anim="fly"))
+        model.add(design, page, model.text("Arc", 0, 500, 600, 200, curve=120))
+        model.make_group(design, page, [a, b])
+        render.render_page(design, 0, 0.25)
+        with tempfile.TemporaryDirectory() as folder:
+            back = pptxio.import_pptx(pptxio.export_pptx(design, Path(folder) / "d2.pptx"))
+        kinds = {e["type"] for e in back["pages"][0]["elements"]}
+        if not {"chart", "path"} <= kinds:
+            raise RuntimeError(f"PowerPoint round trip lost a chart or a pen stroke ({sorted(kinds)})")
+        checker = "spell check: " + ", ".join(t for t in ("en-US", "tr-TR") if spelling.supported(t)) \
+            if spelling.available() else "no Windows spell checker"
+        return f"charts, pen, groups, animations ok; {checker}"
+
     def _mcp() -> str:
         from jarvis import mcp_server
 
@@ -313,6 +340,7 @@ def selftest() -> int:
 
     check("slides", _slides)
     check("design page", _design)
+    check("Design 2.0", _design2)
     check("MCP server", _mcp)
     check("exact algebra", _algebra)
     check("file encryption", _crypto)

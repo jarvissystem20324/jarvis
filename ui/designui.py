@@ -28,23 +28,32 @@ from PIL import Image, ImageTk
 
 from jarvis import kit
 from jarvis.design import ai as dai
-from jarvis.design import fonts, model, render, templates
+from jarvis.design import chart as chart_mod
+from jarvis.design import extras, fonts, model, render, templates
+from ui.design_tools import ANIM_LABELS, TEXT_STYLES, TRANSITION_LABELS, DesignTools
 
 HANDLE = 5
 MARGIN = 40
 HANDLES = {"nw": (-1, -1), "n": (0, -1), "ne": (1, -1), "e": (1, 0), "se": (1, 1), "s": (0, 1), "sw": (-1, 1),
            "w": (-1, 0)}
 DESCRIBE_KINDS = ["Auto", "slides", "poster", "thumbnail", "logo", "card", "menu", "invitation", "sticker", "sale",
+                  "cv", "bookcover", "ticket", "infographic", "carousel", "calendar",
                   "orgchart", "familytree", "timeline", "gantt", "comparison", "kanban", "wireframe", "mindmap"]
 SHORTCUTS = [("Delete", "delete the selection"), ("Ctrl+Z / Ctrl+Y", "undo / redo"),
              ("Ctrl+C / V / X", "copy / paste / cut (V also pastes a picture)"), ("Ctrl+D", "duplicate"),
              ("Ctrl+Shift+C / V", "copy / paste style"), ("Arrow keys", "nudge (Shift: further)"),
+             ("Shift+click / drag a box", "select several"), ("Ctrl+A", "select everything"),
+             ("Ctrl+G / Ctrl+Shift+G", "group / ungroup"), ("Ctrl+click", "one thing inside a group"),
              ("Ctrl+S", "save"), ("Ctrl+E", "export"), ("Ctrl + / − / 0", "zoom in / out / fit"),
              ("Ctrl+wheel", "zoom at the pointer"), ("Middle-drag", "pan"), ("PgUp / PgDn", "previous / next page"),
-             ("T  R  O  L", "add text, box, circle, line"), ("F2 or double-click", "edit text"),
+             ("T  R  O  L", "add text, box, circle, line"), ("P", "draw with the pen"),
+             ("F2 or double-click", "edit text (a chart: its data)"),
              ("Ctrl+] / Ctrl+[", "bring forward / send backward"), ("Ctrl+L", "lock / unlock"),
+             ("Ctrl+F", "find and replace"), ("F7", "spell check"), ("Ctrl+R", "rulers on / off"),
+             ("Drag from a ruler", "add a guide (drag it off the page to remove it)"),
+             ("F5 / Shift+F5", "slideshow from the start / this slide"),
              ("Shift while resizing", "keep proportions"), ("Shift while rotating", "15° steps"),
-             ("Esc", "deselect")]
+             ("Esc", "deselect (or stop drawing)")]
 
 
 def _ui():
@@ -58,7 +67,7 @@ def _rot(x: float, y: float, degrees: float) -> tuple[float, float]:
     return x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
 
 
-class DesignPage(ctk.CTkFrame):
+class DesignPage(DesignTools, ctk.CTkFrame):
     def __init__(self, master, app):
         colors = _ui().COLORS
         super().__init__(master, fg_color=colors["bg"], corner_radius=0)
@@ -67,7 +76,9 @@ class DesignPage(ctk.CTkFrame):
         self.design: dict = templates.blank("slides")
         self.path: Path | None = None
         self.index = 0
-        self.selected_id: str | None = None
+        self.selection: list[str] = []      # selected ids; the last is the main one (selected_id)
+        self._pen_on = False
+        self._guide_drag = None
         self.zoom = 1.0
         self.undo_stack: list[str] = []
         self.redo_stack: list[str] = []
@@ -116,24 +127,46 @@ class DesignPage(ctk.CTkFrame):
         bar.grid(row=0, column=0, sticky="ew")
         self.toolbar = bar
         b = self._button
-        b(bar, "＋ New", self._new_menu).pack(side="left", padx=(10, 3), pady=8)
-        b(bar, "📂 Designs", self.open_gallery).pack(side="left", padx=3)
-        b(bar, "▦ Templates", self.open_templates).pack(side="left", padx=3)
-        self.title_entry = ctk.CTkEntry(bar, width=200, height=30)
-        self.title_entry.pack(side="left", padx=8)
+        # A grid, not pack: when the window is narrow the title box gives up its width first,
+        # rather than the buttons at the right end disappearing.
+        self.title_entry = ctk.CTkEntry(bar, width=80, height=30)
         self.title_entry.bind("<Return>", lambda e: self._set_title())
         self.title_entry.bind("<FocusOut>", lambda e: self._set_title())
-        b(bar, "↶", self.undo, 34).pack(side="left", padx=2)
-        b(bar, "↷", self.redo, 34).pack(side="left", padx=2)
-        b(bar, "−", lambda: self.set_zoom(self.zoom / 1.25), 30).pack(side="left", padx=(10, 2))
-        self.zoom_label = ctk.CTkLabel(bar, text="100%", width=46, text_color=self.colors["muted"])
-        self.zoom_label.pack(side="left")
-        b(bar, "+", lambda: self.set_zoom(self.zoom * 1.25), 30).pack(side="left", padx=2)
-        b(bar, "Fit", self.fit, 40).pack(side="left", padx=2)
-        b(bar, "⌨", self.show_shortcuts, 34).pack(side="right", padx=(3, 10))
+        self.zoom_label = b(bar, "100% ▾", self._zoom_menu, 74)
         self.export_btn = b(bar, "⇩ Export", self._export_menu, fg_color=self.colors["accent_dim"])
-        self.export_btn.pack(side="right", padx=3)
-        b(bar, "💾 Save", self.save).pack(side="right", padx=3)
+        items = [(b(bar, "＋ New", self._new_menu), (10, 3)), (b(bar, "📂 Designs", self.open_gallery), 3),
+                 (b(bar, "▦ Templates", self.open_templates), 3), (self.title_entry, 6),
+                 (b(bar, "↶", self.undo, 34), 2), (b(bar, "↷", self.redo, 34), 2), (self.zoom_label, (8, 2)),
+                 (b(bar, "⋯", self._tools_menu, 34), 2), (None, 0),
+                 (b(bar, "▶ Show", self._present_menu), 3), (b(bar, "💾", self.save, 34), 3),
+                 (self.export_btn, 3), (b(bar, "⌨", self.show_shortcuts, 34), (3, 10))]
+        for column, (widget, padx) in enumerate(items):
+            if widget is None:
+                bar.grid_columnconfigure(column, weight=1)          # the gap between the two ends
+                continue
+            widget.grid(row=0, column=column, padx=padx, pady=8, sticky="ew" if widget is self.title_entry else "")
+        bar.grid_columnconfigure(3, weight=4, minsize=80)
+
+    def _zoom_menu(self) -> None:
+        menu = tkinter.Menu(self, tearoff=0)
+        menu.add_command(label="Zoom in   Ctrl +", command=lambda: self.set_zoom(self.zoom * 1.25))
+        menu.add_command(label="Zoom out   Ctrl −", command=lambda: self.set_zoom(self.zoom / 1.25))
+        menu.add_command(label="Fit the page   Ctrl+0", command=self.fit)
+        menu.add_separator()
+        for share in (0.5, 1.0, 2.0, 4.0):
+            menu.add_command(label=f"{share * 100:.0f}%", command=lambda s=share: self.set_zoom(s))
+        self._popup(menu)
+
+    def _tools_menu(self) -> None:
+        menu = tkinter.Menu(self, tearoff=0)
+        menu.add_command(label="Find and replace…   Ctrl+F", command=self.open_find)
+        menu.add_command(label="Spell check…   F7", command=self.spell_check)
+        menu.add_command(label="Rulers on / off   Ctrl+R", command=self.toggle_rulers)
+        menu.add_command(label="Clear the guides", command=self.clear_guides)
+        menu.add_separator()
+        menu.add_command(label="Every emoji…", command=self.pick_emoji)
+        menu.add_command(label="Draw with the pen   P", command=lambda: self.toggle_pen(True))
+        self._popup(menu)
 
     def _build_body(self) -> None:
         body = ctk.CTkFrame(self, fg_color=self.colors["bg"], corner_radius=0)
@@ -153,17 +186,20 @@ class DesignPage(ctk.CTkFrame):
         # canvas
         holder = ctk.CTkFrame(body, fg_color=self.colors["bg"], corner_radius=0)
         holder.grid(row=0, column=1, sticky="nsew")
-        holder.grid_rowconfigure(0, weight=1)
-        holder.grid_columnconfigure(0, weight=1)
+        holder.grid_rowconfigure(1, weight=1)
+        holder.grid_columnconfigure(1, weight=1)
         dark = _ui().PALETTE.get("appearance") == "dark"
         self.canvas = tkinter.Canvas(holder, bg="#262b36" if dark else "#d5dbe5", highlightthickness=0, bd=0,
                                      xscrollincrement=1, yscrollincrement=1, takefocus=1)
-        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.grid(row=1, column=1, sticky="nsew")
         ys = ctk.CTkScrollbar(holder, orientation="vertical", command=self.canvas.yview)
-        ys.grid(row=0, column=1, sticky="ns")
+        ys.grid(row=1, column=2, sticky="ns")
         xs = ctk.CTkScrollbar(holder, orientation="horizontal", command=self.canvas.xview)
-        xs.grid(row=1, column=0, sticky="ew")
-        self.canvas.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
+        xs.grid(row=2, column=1, sticky="ew")
+        # The rulers follow the canvas as it scrolls.
+        self.canvas.configure(xscrollcommand=lambda *a: (xs.set(*a), self._draw_rulers()),
+                              yscrollcommand=lambda *a: (ys.set(*a), self._draw_rulers()))
+        self._build_rulers(holder)
         self._bind_canvas()
         # side panel
         self.side = ctk.CTkTabview(body, width=300, fg_color=self.colors["panel"],
@@ -221,8 +257,21 @@ class DesignPage(ctk.CTkFrame):
         tab = self.insert_tab
         self._section(tab, "Text")
         row = self._row(tab)
-        for label, kind in (("Title", "title"), ("Heading", "heading"), ("Body", "body")):
-            self._button(row, label, lambda k=kind: self.add_text(k), 82).pack(side="left", padx=2)
+        for label, kind in (("Title", "title"), ("Heading", "heading"), ("Sub", "subheading"), ("Body", "body")):
+            self._button(row, label, lambda k=kind: self.add_text(k), 60).pack(side="left", padx=1)
+        self._section(tab, "Charts and drawing")
+        row = self._row(tab)
+        self._button(row, "📊 Chart…", self._chart_menu, 124).pack(side="left", padx=2)
+        self.pen_btn = self._button(row, "✏ Draw", lambda: self.toggle_pen(), 124)
+        self.pen_btn.pack(side="left", padx=2)
+        self.pen_row = self._row(tab)
+        self._refresh_pen_row()
+        row = self._row(tab)
+        ctk.CTkLabel(row, text="Width", width=50, anchor="w").pack(side="left")
+        width = ctk.CTkSlider(row, from_=1, to=60, width=170,
+                              command=lambda v: setattr(self, "_pen_size", float(v)))
+        width.set(self._pen_width())
+        width.pack(side="left")
         self._section(tab, "Shapes")
         grid = ctk.CTkFrame(tab, fg_color="transparent")
         grid.pack(fill="x")
@@ -245,6 +294,11 @@ class DesignPage(ctk.CTkFrame):
         self.icon_grid = ctk.CTkFrame(tab, fg_color="transparent")
         self.icon_grid.pack(fill="x")
         self._show_icons()
+        self._button(tab, "😀 Every emoji (search)…", self.pick_emoji, 250).pack(anchor="w", pady=(6, 2))
+        self._section(tab, "Bring in")
+        self._button(tab, "📊 Slides from an Excel table…", self.slides_from_excel, 250).pack(anchor="w", pady=2)
+        self._button(tab, "📄 A PDF's pages…", self.import_pdf, 250).pack(anchor="w", pady=2)
+        self._button(tab, "📷 Design from a sketch photo…", self.sketch_design, 250).pack(anchor="w", pady=2)
 
     def _icon_image(self, glyph: str, mono: bool) -> ctk.CTkImage:
         el = model.icon(glyph, 0, 0, 64, set="mono" if mono else "color", color=self.colors["text"])
@@ -291,6 +345,7 @@ class DesignPage(ctk.CTkFrame):
         self.describe_kind.pack(side="left", padx=2)
         self._button(row, "✨ Design it", self.describe_design, 120, fg_color=self.colors["accent_dim"]).pack(
             side="left", padx=2)
+        self._button(tab, "📷 From a photo of a sketch…", self.sketch_design, 250).pack(anchor="w", pady=2)
 
         self._section(tab, "Polish")
         row = self._row(tab)
@@ -356,6 +411,20 @@ class DesignPage(ctk.CTkFrame):
         self._button(row, "Delete", lambda: self.delete_page(self.index), 70).pack(side="left", padx=2)
         self._button(row, "▲", lambda: self.move_page(self.index, -1), 34).pack(side="left", padx=2)
         self._button(row, "▼", lambda: self.move_page(self.index, 1), 34).pack(side="left", padx=2)
+        self._section(tab, "Present")
+        row = self._row(tab)
+        self._button(row, "▶ From the start", lambda: self.present(0), 120,
+                     fg_color=self.colors["accent_dim"]).pack(side="left", padx=2)
+        self._button(row, "This slide", lambda: self.present(), 100).pack(side="left", padx=2)
+        self._button(tab, "🎤 Presenter view (notes, timer)", lambda: self.present(0, presenter=True), 250).pack(
+            anchor="w", pady=2)
+        self._section(tab, "Transition to this slide")
+        row = self._row(tab)
+        self.transition_menu = ctk.CTkOptionMenu(row, values=list(TRANSITION_LABELS.values()), width=110,
+                                                 command=lambda v: self.set_transition(self._transition_key(v)))
+        self.transition_menu.pack(side="left", padx=2)
+        self._button(row, "Every slide", lambda: self.set_transition(
+            self._transition_key(self.transition_menu.get()), all_pages=True), 110).pack(side="left", padx=2)
         self._section(tab, "Slide theme")
         row = self._row(tab)
         self.theme_menu = ctk.CTkOptionMenu(row, values=list(templates.SLIDE_THEMES), width=130)
@@ -383,10 +452,17 @@ class DesignPage(ctk.CTkFrame):
         self.quiz_count.set("6")
         self.quiz_count.pack(side="left", padx=2)
         self._button(row, "❓ Make the quiz", self.quiz_deck, 150).pack(side="left", padx=2)
-        self._section(tab, "PowerPoint")
+        self._section(tab, "PowerPoint, Excel, PDF")
         row = self._row(tab)
         self._button(row, "Open a .pptx…", self.import_pptx, 120).pack(side="left", padx=2)
         self._button(row, "Open in PowerPoint", lambda: self.export("open"), 130).pack(side="left", padx=2)
+        row = self._row(tab)
+        self._button(row, "Slides from Excel…", self.slides_from_excel, 120).pack(side="left", padx=2)
+        self._button(row, "PDF pages…", self.import_pdf, 130).pack(side="left", padx=2)
+        self._section(tab, "Guides")
+        row = self._row(tab)
+        self._button(row, "Rulers on/off", self.toggle_rulers, 120).pack(side="left", padx=2)
+        self._button(row, "Clear guides", self.clear_guides, 130).pack(side="left", padx=2)
 
     def _refresh_page_tab(self) -> None:
         W, H = self.design["w"], self.design["h"]
@@ -398,6 +474,7 @@ class DesignPage(ctk.CTkFrame):
         self._color_controls(self.bg_row, lambda: page.get("bg"), self._set_bg, allow_none=False)
         if self.design.get("theme"):
             self.theme_menu.set(self.design["theme"])
+        self.transition_menu.set(TRANSITION_LABELS.get(page.get("transition", "none"), "None"))
 
     # =====================================================================================
     # state
@@ -411,7 +488,7 @@ class DesignPage(ctk.CTkFrame):
         return model.find(self.page, self.selected_id) if self.selected_id else None
 
     def _snapshot(self) -> str:
-        return json.dumps({"design": self.design, "index": self.index, "selected": self.selected_id})
+        return json.dumps({"design": self.design, "index": self.index, "selected": self.selection})
 
     def checkpoint(self) -> None:
         self.undo_stack.append(self._snapshot())
@@ -427,7 +504,8 @@ class DesignPage(ctk.CTkFrame):
         data = json.loads(snap)
         self.design = data["design"]
         self.index = min(data["index"], len(self.design["pages"]) - 1)
-        self.selected_id = data["selected"]
+        chosen = data["selected"]
+        self.selection = list(chosen) if isinstance(chosen, list) else ([chosen] if chosen else [])
         self.dirty = True
         self._load_into_ui(keep_view=True)
 
@@ -738,7 +816,7 @@ class DesignPage(ctk.CTkFrame):
         self._region = (0, 0, max(cw, pw + 2 * self._ox), max(ch, ph + 2 * self._oy))
         self.canvas.configure(scrollregion=self._region)
         try:
-            self.zoom_label.configure(text=f"{round(self.zoom * 100)}%")
+            self.zoom_label.configure(text=f"{round(self.zoom * 100)}% ▾")
         except tkinter.TclError:
             pass
         self.redraw_overlay()
@@ -755,11 +833,36 @@ class DesignPage(ctk.CTkFrame):
         rx, ry = _rot(lx, ly, el.get("rot", 0))
         return self._to_canvas(cx + rx, cy + ry)
 
+    def _outline(self, el: dict, **style) -> list[tuple[float, float]]:
+        w, h = abs(el["w"]), abs(el["h"])
+        corners = [self._corner(el, sx * w / 2, sy * h / 2) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        self.canvas.create_polygon(*[v for point in corners for v in point], fill="", tags="overlay", **style)
+        return corners
+
     def redraw_overlay(self) -> None:
         self.canvas.delete("overlay")
         accent = self.colors["accent"]
+        self._draw_guides()
         for guide in self._guides:
             self.canvas.create_line(*guide, fill="#ec4899", dash=(4, 3), tags="overlay")
+        drag = self._drag
+        if drag is not None and drag["mode"] == "box" and drag.get("moved"):
+            self.canvas.create_rectangle(*self._to_canvas(*drag["start"]), *self._to_canvas(*drag["end"]),
+                                         outline=accent, dash=(4, 3), fill="", tags="overlay")
+        self._draw_rulers()
+        chosen = self.selected_all()
+        if len(chosen) > 1:
+            for item in chosen:
+                self._outline(item, outline=accent, dash=(2, 3), width=1)
+            left, top, right, bottom = model.union_box(chosen)
+            x0, y0 = self._to_canvas(left, top)
+            x1, y1 = self._to_canvas(right, bottom)
+            self.canvas.create_rectangle(x0 - 4, y0 - 4, x1 + 4, y1 + 4, outline=accent, dash=(6, 3), width=1.5,
+                                         tags="overlay")
+            grouped = len({e.get("group") for e in chosen}) == 1 and chosen[0].get("group")
+            self.canvas.create_text(x0 - 4, y0 - 8, text="Group" if grouped else f"{len(chosen)} selected",
+                                    anchor="sw", fill=accent, font=("Segoe UI", 9, "bold"), tags="overlay")
+            return
         el = self.selected()
         if el is None:
             return
@@ -814,11 +917,16 @@ class DesignPage(ctk.CTkFrame):
             "<Control-plus>": lambda e: self.set_zoom(self.zoom * 1.25),
             "<Control-minus>": lambda e: self.set_zoom(self.zoom / 1.25), "<Control-Key-0>": lambda e: self.fit(),
             "<Prior>": lambda e: self.go_to(self.index - 1), "<Next>": lambda e: self.go_to(self.index + 1),
-            "<Escape>": lambda e: self.select(None), "<F2>": lambda e: self.edit_text(),
+            "<Escape>": lambda e: self._escape(), "<F2>": lambda e: self.edit_text(),
             "<Control-bracketright>": lambda e: self.arrange("forward"),
             "<Control-bracketleft>": lambda e: self.arrange("backward"), "<Control-l>": lambda e: self.toggle_lock(),
             "<Key-t>": lambda e: self.add_text("body"), "<Key-r>": lambda e: self.add_shape("rect"),
             "<Key-o>": lambda e: self.add_shape("ellipse"), "<Key-l>": lambda e: self.add_line(False),
+            "<Key-p>": lambda e: self.toggle_pen(), "<Control-a>": lambda e: self.select_all(),
+            "<Control-g>": lambda e: self.group_selected(), "<Control-G>": lambda e: self.ungroup_selected(),
+            "<Control-f>": lambda e: self.open_find(), "<Control-h>": lambda e: self.open_find(),
+            "<Control-r>": lambda e: self.toggle_rulers(), "<F7>": lambda e: self.spell_check(),
+            "<F5>": lambda e: self.present(0), "<Shift-F5>": lambda e: self.present(),
         }
         for sequence, handler in keys.items():
             c.bind(sequence, lambda e, h=handler: (h(e), "break")[1])
@@ -842,31 +950,67 @@ class DesignPage(ctk.CTkFrame):
         if self._eyedropper is not None:
             self._sample(event)
             return
+        if self._pen_on:
+            self._drag = {"mode": "pen", "points": [(x, y)], "moved": False}
+            return
+        shift, ctrl = bool(event.state & 0x1), bool(event.state & 0x4)
         handle = self._handle_at(event)
         el = self.selected()
-        if handle and el is not None and not el.get("locked"):
+        if handle and el is not None and not el.get("locked") and len(self.selection) == 1:
             mode = "rotate" if handle == "rotate" else ("point" if handle in {"p1", "p2"} else "resize")
             self._drag = {"mode": mode, "handle": handle, "start": (x, y), "orig": model.clone(el),
                           "snap": self._snapshot(), "moved": False}
+            return
+        guide = self._guide_at(x, y)
+        if guide is not None and not shift:
+            self._drag = {"mode": "guide", "axis": guide[0], "index": guide[1], "snap": self._snapshot(),
+                          "moved": False}
             return
         hit = model.hit(self.page, x, y, 6 / self._scale, include_locked=True)
         if hit is not None and hit.get("locked") and hit["id"] != self.selected_id:
             # A locked element is selected (to unlock it) but never dragged.
             unlocked = model.hit(self.page, x, y, 6 / self._scale)
             hit = unlocked or hit
-        self.select(hit["id"] if hit else None)
-        if hit is not None and not hit.get("locked"):
-            self._drag = {"mode": "move", "start": (x, y), "orig": model.clone(hit), "snap": self._snapshot(),
-                          "moved": False}
-        else:
+        if shift and hit is not None and not hit.get("locked"):
+            self.select(hit["id"], toggle=True)
             self._drag = None
+            return
+        if hit is not None and hit["id"] in self.selection and len(self.selection) > 1 and not ctrl:
+            pass                                  # keep the selection: dragging one moves them all
+        elif not (shift and hit is None):
+            self.select(hit["id"] if hit else None, single=ctrl)
+        if hit is not None and not hit.get("locked"):
+            moving = [e for e in self.selected_all() if not e.get("locked")]
+            self._drag = {"mode": "move", "start": (x, y), "orig": {e["id"]: (e["x"], e["y"]) for e in moving},
+                          "snap": self._snapshot(), "moved": False}
+        else:
+            self._drag = {"mode": "box", "start": (x, y), "end": (x, y), "add": shift, "moved": False}
 
     def _motion(self, event) -> None:
         drag = self._drag
-        el = self.selected()
-        if drag is None or el is None:
+        if drag is None:
             return
         x, y = self._to_design(event.x, event.y)
+        if drag["mode"] == "pen":
+            self._pen_motion(drag, x, y)
+            return
+        if drag["mode"] == "box":
+            sx, sy = drag["start"]
+            drag["end"] = (x, y)
+            drag["moved"] = drag["moved"] or math.hypot((x - sx) * self._scale, (y - sy) * self._scale) >= 4
+            self.redraw_overlay()
+            return
+        if drag["mode"] == "guide":
+            if not drag["moved"]:
+                self.undo_stack.append(drag["snap"])
+                self.redo_stack.clear()
+                drag["moved"] = True
+            self._guides_of()[drag["axis"]][drag["index"]] = round(y if drag["axis"] == "h" else x)
+            self.redraw_overlay()
+            return
+        el = self.selected()
+        if el is None:
+            return
         sx, sy = drag["start"]
         if not drag["moved"]:
             if math.hypot((x - sx) * self._scale, (y - sy) * self._scale) < 2:
@@ -878,8 +1022,13 @@ class DesignPage(ctk.CTkFrame):
         shift = bool(event.state & 0x1)
         self._guides = []
         if drag["mode"] == "move":
-            el["x"], el["y"] = orig["x"] + x - sx, orig["y"] + y - sy
-            self._snap(el)
+            moving = []
+            for element_id, (ox, oy) in orig.items():
+                item = model.find(self.page, element_id)
+                if item is not None:
+                    item["x"], item["y"] = ox + x - sx, oy + y - sy
+                    moving.append(item)
+            self._snap_move(moving)
         elif drag["mode"] == "point":
             if drag["handle"] == "p1":
                 end = (orig["x"] + orig["w"], orig["y"] + orig["h"])
@@ -920,23 +1069,23 @@ class DesignPage(ctk.CTkFrame):
         el["w"], el["h"] = w, h
         el["x"], el["y"] = cx - w / 2, cy - h / 2
 
-    def _snap(self, el: dict) -> None:
-        """Pull the element's centre onto the page's centre lines, and show the guide."""
-        W, H = self.design["w"], self.design["h"]
-        cx, cy = model.center(el)
-        reach = 8 / self._scale
-        if abs(cx - W / 2) < reach:
-            el["x"] += W / 2 - cx
-            self._guides.append((*self._to_canvas(W / 2, 0), *self._to_canvas(W / 2, H)))
-        if abs(cy - H / 2) < reach:
-            el["y"] += H / 2 - cy
-            self._guides.append((*self._to_canvas(0, H / 2), *self._to_canvas(W, H / 2)))
-
     def _release(self, event) -> None:
-        moved = self._drag is not None and self._drag.get("moved")
+        drag = self._drag
         self._drag = None
         self._guides = []
-        if moved:
+        if drag is not None and drag["mode"] == "pen":
+            self._pen_release(drag)
+            return
+        if drag is not None and drag["mode"] == "box":
+            if drag["moved"]:
+                self._box_select(drag["start"], drag["end"], drag["add"])
+            else:
+                self.redraw_overlay()
+            return
+        if drag is not None and drag["mode"] == "guide":
+            self._drop_guide(drag["axis"], drag["index"])
+            return
+        if drag is not None and drag.get("moved"):
             self._refresh_style()
             self.redraw()
         else:
@@ -946,6 +1095,9 @@ class DesignPage(ctk.CTkFrame):
         if self._eyedropper is not None:
             self.canvas.configure(cursor="crosshair")
             return
+        if self._pen_on:
+            self.canvas.configure(cursor="pencil")
+            return
         handle = self._handle_at(event)
         cursor = {"rotate": "exchange", "p1": "crosshair", "p2": "crosshair", "n": "sb_v_double_arrow",
                   "s": "sb_v_double_arrow", "e": "sb_h_double_arrow", "w": "sb_h_double_arrow"}.get(handle or "", "")
@@ -953,7 +1105,11 @@ class DesignPage(ctk.CTkFrame):
             cursor = "sizing"
         if not cursor:
             x, y = self._to_design(event.x, event.y)
-            cursor = "fleur" if model.hit(self.page, x, y, 6 / self._scale) else ""
+            guide = self._guide_at(x, y)
+            if guide is not None:
+                cursor = "sb_h_double_arrow" if guide[0] == "v" else "sb_v_double_arrow"
+            else:
+                cursor = "fleur" if model.hit(self.page, x, y, 6 / self._scale) else ""
         self.canvas.configure(cursor=cursor)
 
     def _wheel(self, event) -> None:
@@ -966,22 +1122,51 @@ class DesignPage(ctk.CTkFrame):
             self.canvas.yview_scroll(steps * 60, "units")
 
     def _double(self, event) -> None:
+        if self._pen_on:
+            return
         x, y = self._to_design(event.x, event.y)
         hit = model.hit(self.page, x, y, 6 / self._scale)
         if hit is not None and hit["type"] in {"text", "shape", "table"}:
-            self.select(hit["id"])
+            self.select(hit["id"], single=True)
             self.edit_text()
+        elif hit is not None and hit["type"] == "chart":
+            self.select(hit["id"], single=True)
+            self.edit_chart_data()
 
     def _context(self, event) -> None:
         x, y = self._to_design(event.x, event.y)
         hit = model.hit(self.page, x, y, 6 / self._scale, include_locked=True)
         menu = tkinter.Menu(self, tearoff=0)
         if hit is not None:
-            self.select(hit["id"])
-            if hit["type"] in {"text", "shape", "table"}:
+            if hit["id"] not in self.selection:
+                self.select(hit["id"])
+            several = len(self.selection) > 1
+            if several:
+                grouped = len({e.get("group") for e in self.selected_all()}) == 1 and hit.get("group")
+                if not grouped:
+                    menu.add_command(label="Group   Ctrl+G", command=self.group_selected)
+                align = tkinter.Menu(menu, tearoff=0)
+                for label, how in (("Left", "left"), ("Centre", "center"), ("Right", "right"), ("Top", "top"),
+                                   ("Middle", "middle"), ("Bottom", "bottom"), ("Space across", "hspace"),
+                                   ("Space down", "vspace")):
+                    align.add_command(label=label, command=lambda h=how: self.align_selected(h))
+                menu.add_cascade(label="Align", menu=align)
+            if any(e.get("group") for e in self.selected_all()):
+                menu.add_command(label="Ungroup   Ctrl+Shift+G", command=self.ungroup_selected)
+            if several or hit.get("group"):
+                menu.add_separator()
+            if hit["type"] in {"text", "shape", "table"} and not several:
                 menu.add_command(label="Edit text   F2", command=self.edit_text)
-            if hit["type"] == "image":
+            if hit["type"] in {"text", "shape"} and not several:
+                rewrite = tkinter.Menu(menu, tearoff=0)
+                for how, label in extras.REWRITE_LABELS.items():
+                    rewrite.add_command(label=label, command=lambda h=how: self.rewrite_selected(h))
+                menu.add_cascade(label="✨ Rewrite with AI", menu=rewrite)
+            if hit["type"] == "chart" and not several:
+                menu.add_command(label="Edit chart data…", command=self.edit_chart_data)
+            if hit["type"] == "image" and not several:
                 menu.add_command(label="Replace picture…", command=self.replace_image)
+                menu.add_command(label="Remove white background", command=self.remove_background)
             menu.add_command(label="Duplicate   Ctrl+D", command=self.duplicate_selected)
             menu.add_command(label="Delete   Del", command=self.delete_selected)
             menu.add_separator()
@@ -992,6 +1177,7 @@ class DesignPage(ctk.CTkFrame):
             menu.add_command(label="Unlock" if hit.get("locked") else "Lock", command=self.toggle_lock)
         else:
             menu.add_command(label="Paste   Ctrl+V", command=self.paste_element)
+            menu.add_command(label="Select all   Ctrl+A", command=self.select_all)
             menu.add_command(label="Add text here", command=lambda: self.add_text("body", at=(x, y)))
             menu.add_command(label="Page background…", command=lambda: self._pick_color(self._set_bg, self.page.get("bg")))
         self._popup(menu, event)
@@ -1000,16 +1186,26 @@ class DesignPage(ctk.CTkFrame):
     # selection and element actions
     # =====================================================================================
 
-    def select(self, element_id: str | None) -> None:
-        if element_id != self.selected_id:
+    def select(self, element_id: str | None, toggle: bool = False, single: bool = False) -> None:
+        """Select one element — with the rest of its group unless `single` (Ctrl+click) —
+        or add it to / take it out of the selection (`toggle`, Shift+click)."""
+        before = list(self.selection)
+        if element_id is None:
+            chosen = before if toggle else []
+        else:
+            ids = [element_id] if single else self._with_group(element_id)
+            if toggle and element_id in before:
+                chosen = [i for i in before if i not in ids]
+            elif toggle:
+                chosen = [i for i in before if i not in ids] + ids
+            else:
+                chosen = ids
+        if chosen != before:
             self._commit_editor()
-            self.selected_id = element_id
+            self.selection = chosen
             self._refresh_style()
-            if element_id is not None:
-                try:
-                    self.side.set("Style")
-                except Exception:
-                    pass
+            if chosen:
+                self.show_side("Style")
         if element_id is not None:
             # The keyboard follows the selection, so Delete, Ctrl+D and the arrows
             # work straight after inserting from the side panel.
@@ -1041,11 +1237,13 @@ class DesignPage(ctk.CTkFrame):
 
     def add_text(self, kind: str, at=None) -> dict:
         H, W = self.design["h"], self.design["w"]
-        size = {"title": H * 0.085, "heading": H * 0.055, "body": H * 0.032}[kind]
-        words = {"title": "Your title", "heading": "A heading", "body": "Write something here"}[kind]
+        share, bold, heading = TEXT_STYLES[kind]
+        size = H * share
+        words = {"title": "Your title", "heading": "A heading", "subheading": "A subheading",
+                 "body": "Write something here", "caption": "A caption"}[kind]
         ink = model.readable_on(self.page.get("bg", "#ffffff"))
-        el = model.text(words, 0, 0, W * (0.7 if kind != "body" else 0.5), size * 1.5, size=size,
-                        bold=kind != "body", font=self._font(kind != "body"), color=ink, autofit=True,
+        el = model.text(words, 0, 0, W * (0.7 if kind in {"title", "heading"} else 0.5), size * 1.5, size=size,
+                        bold=bold, font=self._font(heading), color=ink, autofit=True,
                         role="title" if kind == "title" else "")
         return self._place(el, at)
 
@@ -1111,28 +1309,50 @@ class DesignPage(ctk.CTkFrame):
         self.redraw()
 
     def delete_selected(self) -> None:
-        el = self.selected()
-        if el is None:
+        chosen = self.selected_all()
+        if not chosen:
             return
         self.checkpoint()
-        self.page["elements"].remove(el)
+        for el in chosen:
+            self.page["elements"].remove(el)
         self.select(None)
         self.redraw()
 
+    def _copies(self, elements: list[dict], dx: float, dy: float, index: int | None = None) -> list[dict]:
+        """Copies added to the page. Copied group members form a new group of their own; a lone
+        member copied out of a group isn't in any."""
+        counts: dict[str, int] = {}
+        for el in elements:
+            if el.get("group"):
+                counts[el["group"]] = counts.get(el["group"], 0) + 1
+        groups = {old: model.new_group_id(self.design) for old, n in counts.items() if n > 1}
+        made = []
+        for el in elements:
+            copy = model.clone(el)
+            copy["x"] += dx
+            copy["y"] += dy
+            copy["locked"] = False
+            copy["group"] = groups.get(el.get("group", ""), "")
+            made.append(model.add(self.design, self.page, copy, index))
+            if index is not None:
+                index += 1
+        return made
+
     def duplicate_selected(self) -> None:
-        el = self.selected()
-        if el is None:
+        chosen = self.selected_all()
+        if not chosen:
             return
         self.checkpoint()
-        copy = model.duplicate(self.design, self.page, el, offset=self.design["w"] * 0.02)
-        self.select(copy["id"])
+        top = max(self.page["elements"].index(e) for e in chosen) + 1
+        made = self._copies(chosen, self.design["w"] * 0.02, self.design["w"] * 0.02, top)
+        self._set_selection([e["id"] for e in made])
         self.redraw()
 
     def copy_element(self) -> None:
-        el = self.selected()
-        if el is not None:
-            self._element_clip = model.clone(el)
-            self._say("Copied.")
+        chosen = self.selected_all()
+        if chosen:
+            self._element_clip = [model.clone(e) for e in chosen]
+            self._say("Copied." if len(chosen) == 1 else f"Copied {len(chosen)}.")
 
     def cut_element(self) -> None:
         self.copy_element()
@@ -1151,15 +1371,16 @@ class DesignPage(ctk.CTkFrame):
             self._place(self._image_element(model.import_asset(path)))
             path.unlink(missing_ok=True)
             return
-        if self._element_clip is None:
+        if not self._element_clip:
             return
-        el = model.clone(self._element_clip)
-        el["x"] += self.design["w"] * 0.02
-        el["y"] += self.design["h"] * 0.02
-        self._element_clip = model.clone(el)
+        clip = self._element_clip if isinstance(self._element_clip, list) else [self._element_clip]
         self.checkpoint()
-        model.add(self.design, self.page, el)
-        self.select(el["id"])
+        dx, dy = self.design["w"] * 0.02, self.design["h"] * 0.02
+        made = self._copies([model.clone(e) for e in clip], dx, dy)
+        for el in clip:                      # the next paste lands a step further on
+            el["x"] += dx
+            el["y"] += dy
+        self._set_selection([e["id"] for e in made])
         self.redraw()
 
     def copy_style(self) -> None:
@@ -1179,11 +1400,13 @@ class DesignPage(ctk.CTkFrame):
         self._say(f"Pasted {len(changed)} style setting(s).")
 
     def arrange(self, where: str) -> None:
-        el = self.selected()
-        if el is None:
+        chosen = self.selected_all()
+        if not chosen:
             return
         self.checkpoint()
-        model.arrange(self.page, el, where)
+        # In an order that keeps the selected things stacked as they were among themselves.
+        for el in (chosen if where in {"front", "backward"} else list(reversed(chosen))):
+            model.arrange(self.page, el, where)
         self.redraw()
 
     def toggle_lock(self) -> None:
@@ -1191,17 +1414,20 @@ class DesignPage(ctk.CTkFrame):
         if el is None:
             return
         self.checkpoint()
-        el["locked"] = not el.get("locked")
+        locked = not el.get("locked")
+        for item in self.selected_all():
+            item["locked"] = locked
         self._refresh_style()
         self.redraw_overlay()
-        self._say("Locked." if el["locked"] else "Unlocked.")
+        self._say("Locked." if locked else "Unlocked.")
 
     def nudge(self, dx: int, dy: int, step: float) -> None:
-        el = self.selected()
-        if el is None or el.get("locked"):
+        chosen = [e for e in self.selected_all() if not e.get("locked")]
+        if not chosen:
             return
         self._mark_edit("nudge")
-        model.move(el, dx * step, dy * step)
+        for el in chosen:
+            model.move(el, dx * step, dy * step)
         self.redraw()
 
     # --- inline text editing -----------------------------------------------------------------
@@ -1290,8 +1516,11 @@ class DesignPage(ctk.CTkFrame):
                          wraplength=250, justify="left", text_color=self.colors["muted"]).pack(fill="x", pady=12)
             return
         kind = el["type"]
+        if len(self.selection) > 1:
+            self._selection_header(tab)
         title = {"text": "Text", "shape": f"Shape · {el.get('shape')}", "line": "Line", "image": "Picture",
-                 "icon": "Icon", "table": "Table"}[kind]
+                 "icon": "Icon", "table": "Table", "chart": f"Chart · {chart_mod.LABELS.get(el.get('chart'), '')}",
+                 "path": "Drawing"}[kind]
         ctk.CTkLabel(tab, text=title + ("  🔒" if el.get("locked") else ""), font=ctk.CTkFont(size=15, weight="bold"),
                      anchor="w").pack(fill="x", pady=(6, 2))
         if kind in {"text", "shape"}:
@@ -1300,7 +1529,24 @@ class DesignPage(ctk.CTkFrame):
             box.insert("1.0", el.get("text", ""))
             box.pack(fill="x", pady=2)
             box.bind("<KeyRelease>", lambda e: self._set("text", box.get("1.0", "end-1c"), rerender_style=False))
+            row = self._row(tab)
+            self._button(row, "✨ Rewrite with AI ▾", self._rewrite_menu, 160).pack(side="left", padx=2)
+            row = self._row(tab)
+            for label, style in (("Title", "title"), ("Head", "heading"), ("Sub", "subheading"), ("Body", "body"),
+                                 ("Small", "caption")):
+                self._button(row, label, lambda s=style: self.apply_text_style(s), 48, height=26).pack(
+                    side="left", padx=1)
             self._text_controls(tab, el)
+        if kind == "chart":
+            self._chart_controls(tab, el)
+        if kind == "path":
+            self._section(tab, "Pen stroke")
+            self._color_row(tab, "Colour", "stroke", allow_none=True)
+            self._slider(tab, "Width", "stroke_w", 1, 80)
+            self._check(tab, "Closed shape", "closed")
+            if el.get("closed"):
+                self._color_row(tab, "Fill", "fill", allow_none=True)
+            self._check(tab, "Smooth", "smooth")
         if kind == "table":
             self._section(tab, "Cells (one row per line, columns split by |)")
             box = ctk.CTkTextbox(tab, height=90, wrap="none")
@@ -1323,6 +1569,10 @@ class DesignPage(ctk.CTkFrame):
             self._section(tab, "Shape")
             self._option(tab, "Kind", "shape", list(model.SHAPES))
             self._color_row(tab, "Fill", "fill", allow_none=True)
+            self._option(tab, "Pattern", "pattern", list(model.PATTERNS))
+            if el.get("pattern", "none") != "none":
+                self._color_row(tab, "Pattern ink", "pattern_color")
+                self._slider(tab, "Pattern size", "pattern_size", 6, 160)
             self._color_row(tab, "Outline", "stroke", allow_none=True)
             self._slider(tab, "Outline width", "stroke_w", 0, 40)
             if el.get("shape") in {"round", "bubble"}:
@@ -1349,6 +1599,13 @@ class DesignPage(ctk.CTkFrame):
         if kind != "line":
             self._slider(tab, "Rotation", "rot", 0, 359)
         self._slider(tab, "Opacity", "opacity", 0.05, 1.0)
+        self._section(tab, "Animation (slideshow and PowerPoint)")
+        row = self._row(tab)
+        ctk.CTkLabel(row, text="Comes in", width=70, anchor="w").pack(side="left")
+        menu = ctk.CTkOptionMenu(row, values=list(ANIM_LABELS.values()), width=150,
+                                 command=lambda v: self._set("anim", next(k for k, l in ANIM_LABELS.items() if l == v)))
+        menu.set(ANIM_LABELS.get(el.get("anim", "none"), "None"))
+        menu.pack(side="left")
         self._section(tab, "Arrange")
         row = self._row(tab)
         for label, where in (("Front", "front"), ("Forward", "forward"), ("Back", "back")):
@@ -1376,9 +1633,41 @@ class DesignPage(ctk.CTkFrame):
         self._color_row(tab, "Text colour", "color")
         if el["type"] == "text":
             self._color_row(tab, "Box fill", "fill", allow_none=True)
+            self._section(tab, "Outline, shadow, curve")
+            self._color_row(tab, "Outline", "stroke", allow_none=True)
+            self._slider(tab, "Outline width", "stroke_w", 0, 20)
             self._check(tab, "Shadow", "shadow")
+            self._slider(tab, "Curve", "curve", -180, 180)
+            row = self._row(tab)
+            self._button(row, "◠ Arch", lambda: self._set("curve", 120), 70).pack(side="left", padx=2)
+            self._button(row, "◡ Smile", lambda: self._set("curve", -120), 70).pack(side="left", padx=2)
+            self._button(row, "Straight", lambda: self._set("curve", 0), 80).pack(side="left", padx=2)
         self._slider(tab, "Line spacing", "line", 0.8, 2.2)
         self._check(tab, "Shrink to fit the box", "autofit")
+
+    def _chart_controls(self, tab, el: dict) -> None:
+        self._section(tab, "Chart")
+        row = self._row(tab)
+        ctk.CTkLabel(row, text="Kind", width=70, anchor="w").pack(side="left")
+        menu = ctk.CTkOptionMenu(row, values=list(chart_mod.LABELS.values()), width=150,
+                                 command=lambda v: self._set("chart", next(k for k, l in chart_mod.LABELS.items()
+                                                                           if l == v)))
+        menu.set(chart_mod.LABELS.get(el.get("chart"), "Bars"))
+        menu.pack(side="left")
+        title = ctk.CTkEntry(tab, placeholder_text="Chart title (optional)")
+        title.insert(0, el.get("title", ""))
+        title.pack(fill="x", pady=2)
+        title.bind("<KeyRelease>", lambda e: self._set("title", title.get(), rerender_style=False))
+        self._button(tab, "▦ Edit the data…", self.edit_chart_data, 250, fg_color=self.colors["accent_dim"]).pack(
+            anchor="w", pady=2)
+        labels, series = chart_mod.parse(el.get("rows") or [])
+        ctk.CTkLabel(tab, text=f"{len(series)} series × {len(labels)} labels", text_color=self.colors["muted"],
+                     anchor="w").pack(fill="x")
+        self._check(tab, "Legend", "legend")
+        self._check(tab, "Show the numbers", "labels")
+        self._color_row(tab, "First colour", "fill")
+        self._color_row(tab, "Text", "color")
+        self._font_controls(tab, el)
 
     def _font_controls(self, tab, el: dict) -> None:
         self._section(tab, "Font")
@@ -1399,6 +1688,9 @@ class DesignPage(ctk.CTkFrame):
         self._button(row, "Replace…", self.replace_image, 90).pack(side="left", padx=2)
         self._button(row, "Flip ↔", lambda: self._set("flip_h", not el.get("flip_h")), 70).pack(side="left", padx=2)
         self._button(row, "Flip ↕", lambda: self._set("flip_v", not el.get("flip_v")), 70).pack(side="left", padx=2)
+        row = self._row(tab)
+        self._button(row, "✂ Remove white background", self.remove_background, 190).pack(side="left", padx=2)
+        self._button(row, "More", lambda: self.remove_background(60), 50).pack(side="left", padx=2)
         self._option(tab, "Filter", "filter", list(model.FILTERS))
         self._seg(tab, "Fit", "fit", ["cover", "contain", "stretch"])
         self._section(tab, "Crop")
@@ -1429,6 +1721,8 @@ class DesignPage(ctk.CTkFrame):
             self._set("size", el["size"] * factor)
 
     def _set(self, key: str, value, rerender_style: bool = True) -> None:
+        """Change one property of the selection: the main element, and every other selected
+        element that has it (except where-it-is and what-it-says, which stay each one's own)."""
         el = self.selected()
         if el is None:
             return
@@ -1436,13 +1730,26 @@ class DesignPage(ctk.CTkFrame):
             clean = model.clean_value(el["type"], key, value, el.get(key))
         except KeyError:
             return
-        if clean == el.get(key):
+        others = [] if key in {"x", "y", "w", "h", "text", "rows", "points", "title", "src"} else \
+            [e for e in self.selected_all() if e is not el]
+        changes = []
+        for item in others:
+            try:
+                new = model.clean_value(item["type"], key, value, item.get(key))
+            except KeyError:
+                continue
+            if new != item.get(key):
+                changes.append((item, new))
+        if clean == el.get(key) and not changes:
             return
         self._mark_edit(f"{el['id']}:{key}")
         el[key] = clean
+        for item, new in changes:
+            item[key] = new
         self.schedule_render()
         if rerender_style and key in {"shape", "set", "bold", "italic", "underline", "fill", "stroke", "color",
-                                      "header_color", "stripe", "font", "circle", "flip_h", "flip_v", "locked"}:
+                                      "header_color", "stripe", "font", "circle", "flip_h", "flip_v", "locked",
+                                      "pattern", "pattern_color", "closed", "chart", "curve", "legend", "labels"}:
             self.after(10, self._refresh_style)
 
     def _number(self, grid, label: str, key: str, column: int) -> None:
@@ -1523,7 +1830,7 @@ class DesignPage(ctk.CTkFrame):
     def _stop_eyedropper(self) -> None:
         self._eyedropper = None
         self.canvas.configure(cursor="")
-        self.canvas.bind("<Escape>", lambda e: (self.select(None), "break")[1])
+        self.canvas.bind("<Escape>", lambda e: (self._escape(), "break")[1])
 
     def _sample(self, event) -> None:
         put = self._eyedropper
@@ -2072,6 +2379,12 @@ class DesignPage(ctk.CTkFrame):
         if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
             self.add_image_file(str(path))
             return True
+        if suffix in {".xlsx", ".xlsm", ".csv"}:
+            self.slides_from_excel(str(path))
+            return True
+        if suffix == ".pdf":
+            self.import_pdf(str(path))
+            return True
         return False
 
     # =====================================================================================
@@ -2189,7 +2502,9 @@ class DesignPage(ctk.CTkFrame):
         catalogue = templates.catalogue()
         mine = model.listing(model.templates_dir())
         groups = ["All"] + list(dict.fromkeys(item["group"] for item in catalogue)) + (["Mine"] if mine else [])
-        choice = ctk.CTkSegmentedButton(top, values=groups, selected_color=self.colors["accent_dim"])
+        # A drop-down: 10.0 has eighteen groups, too many for a row of buttons.
+        ctk.CTkLabel(top, text="Show", text_color=self.colors["muted"]).pack(side="left", padx=(0, 6))
+        choice = ctk.CTkOptionMenu(top, values=groups, width=220)
         choice.pack(side="left")
         dialog._images = []
 

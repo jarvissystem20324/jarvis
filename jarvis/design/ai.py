@@ -38,6 +38,18 @@ FIELDS = {
                   '"place": "...", "rsvp": "RSVP line"',
     "sticker": '"text": "1-3 words", "sub": "1-3 words", "icon": "one symbol like ★ ✓ ♥ ⚡"',
     "sale": '"headline": "1-3 words", "discount": "50%", "sub": "...", "dates": "...", "cta": "2-3 words"',
+    "cv": '"name": "...", "title": "job title", "contact": ["email", "phone", "city"], "summary": "2-3 sentences", '
+          '"experience": [{"role": "...", "place": "...", "dates": "2022 – now", "text": "one line"}], '
+          '"education": [{"role": "degree", "place": "school", "dates": "..."}], "skills": ["..."], '
+          '"languages": ["Turkish (native)"]',
+    "bookcover": '"title": "...", "subtitle": "...", "author": "..."',
+    "ticket": '"event": "...", "date": "...", "time": "...", "place": "...", "seat": "...", "price": "...", '
+              '"code": "short ticket number", "note": "small line above the event"',
+    "infographic": '"title": "...", "subtitle": "...", "items": [{"title": "...", "text": "one sentence", '
+                   '"value": "a number", "icon": "one emoji"}], "footer": "source or a closing line" — 4-6 items',
+    "carousel": '"title": "cover headline", "slides": [{"title": "...", "text": "1-2 sentences"}], '
+                '"handle": "@name", "cta": "closing line" — 4-7 slides',
+    "calendar": '"year": 2027, "month": 1, "title": "whose calendar", "events": {"14": "short note"}',
     "slides": '"title": "...", "subtitle": "...", "slides": [{"title": "...", "bullets": ["under 12 words"], '
               '"notes": "2-3 sentences to say"}] — 6-10 slides',
 }
@@ -229,12 +241,16 @@ Request: {request}
 Reply with JSON: {{"ops": [...], "say": "one short sentence about what you changed"}}
 ops can be:
   {{"op": "set", "id": "e3", "props": {{"size": 72, "color": "#1e40af", "x": 100, "text": "..."}}}}
-  {{"op": "add", "element": {{"type": "text|shape|line|icon", "x": 0, "y": 0, "w": 100, "h": 50, ...}}}}
+  {{"op": "add", "element": {{"type": "text|shape|line|icon|chart", "x": 0, "y": 0, "w": 100, "h": 50, ...}}}}
   {{"op": "delete", "id": "e5"}}
   {{"op": "background", "color": "#ffffff"}}
   {{"op": "order", "id": "e2", "to": "front|back"}}
 Properties: text, font, size (px), color, fill, stroke, stroke_w, bold, italic, align (left|center|right),
-valign, x, y, w, h, rot, opacity (0-1), shape (rect|round|ellipse|star|...), glyph (for icons), autofit.
+valign, x, y, w, h, rot, opacity (0-1), shape (rect|round|ellipse|star|...), glyph (for icons), autofit,
+curve (text on an arc, -180 to 180), pattern (none|stripes|dots|grid|checks|lines|waves) and pattern_color for shapes,
+anim (none|appear|fade|fly|zoom|wipe: how it comes in during a slideshow),
+chart (bar|hbar|line|area|pie|doughnut), title and rows for charts (first row: "" then series names; then a label
+and its numbers per row).
 Change only what the request asks; keep everything inside the page; colours as #rrggbb."""
 
 
@@ -540,11 +556,14 @@ def resize(design: dict, fmt: str) -> dict:
                     w, h = el["w"] * s, el["h"] * s
                 el["w"], el["h"] = w, h
                 el["x"], el["y"] = cx * sx - w / 2, cy * sy - h / 2
-            for key in ("size", "stroke_w", "radius", "pad"):
+            for key in ("size", "stroke_w", "radius", "pad", "pattern_size"):
                 if key in el and isinstance(el[key], (int, float)):
                     el[key] = el[key] * s if key != "size" else max(6.0, el[key] * s)
             if el["type"] in {"text", "shape"} and el.get("text"):
                 el["autofit"] = True
+    if out.get("guides"):
+        out["guides"] = {"v": [g * sx for g in out["guides"].get("v", [])],
+                         "h": [g * sy for g in out["guides"].get("h", [])]}
     for i in range(len(out["pages"])):
         polish(out, i)
     return out

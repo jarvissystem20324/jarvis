@@ -91,7 +91,7 @@ FONT_PAIRS: list[tuple[str, str, str]] = [
 ]
 ICONS: dict[str, str] = {
     "Faces": "😀 😂 😍 🤩 😎 🤔 😴 😭 😡 🥳 🤯 😇 🙂 😉 😱 🤓",
-    "People": "👍 👎 👏 🙌 🤝 ✌️ 👋 💪 🙏 👀 🧠 ❤️ 👨‍🎓 👩‍💻 👨‍🍳 🧑‍🏫",
+    "People": "👍 👎 👏 🙌 🤝 ✌️ 👋 💪 🙏 👀 🧠 ❤️ 👨\u200d🎓 👩\u200d💻 👨\u200d🍳 🧑\u200d🏫",
     "Objects": "💡 📱 💻 ⌚ 📷 🎁 📚 ✏️ 📌 📎 🔑 🔒 🛒 🎧 🎮 🧪",
     "Business": "📈 📉 💰 💳 🏆 🎯 📊 🗂️ 📅 ⏰ ✅ ❌ 📣 🤖 🚀 ⚙️",
     "Nature": "🌸 🌻 🌿 🍀 🌳 🌊 🔥 ⭐ 🌙 ☀️ ⛅ ❄️ 🌈 🍁 🌵 🌺",
@@ -932,7 +932,7 @@ def make(kind: str, variant: str = "", content: dict | None = None, style: dict 
 
 
 def catalogue() -> list[dict]:
-    """Every built-in template: {key, label, group, make()} — 24 designs, 12 slide themes, 8 diagrams."""
+    """Every built-in template: {key, label, group, make()} — 38 designs, 12 slide themes, 8 diagrams."""
     out = []
     for kind, spec in KINDS.items():
         for variant in spec["variants"]:
@@ -957,3 +957,6 @@ def blank(fmt: str = "slides") -> dict:
     if fmt == "slides":
         design["pages"][0]["layout"] = "content"
     return design
+
+
+from . import more_templates  # noqa: E402,F401  (10.0's kinds join KINDS)

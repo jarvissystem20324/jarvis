@@ -1314,6 +1314,15 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         key, _, part = target.partition(":")
         from ui.pages import BY_KEY
 
+        if key == "design":
+            # The Design page isn't a hub: "design:present" starts the slideshow, and so on.
+            try:
+                self._show_tab("design")
+                if part:
+                    self.design_page().open_target(part)
+            except Exception:
+                pass
+            return
         if key not in BY_KEY:
             return
         try:

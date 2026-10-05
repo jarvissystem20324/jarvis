@@ -26,7 +26,7 @@ _MEASURE = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 # Dots per inch a design prints at, by format: A4 pages are 150 dpi, slides
 # are 13.33 inches wide like PowerPoint's own 16:9.
 INCHES_WIDE = {"slides": 13.333, "diagram": 13.333, "poster": 8.27, "a4_landscape": 11.69, "invitation": 5.0,
-               "card": 7.0}
+               "card": 7.0, "book": 6.0, "ticket": 7.5}
 
 
 # --- the page ------------------------------------------------------------------------------
@@ -65,8 +65,9 @@ _LAYERS: "OrderedDict[str, tuple[Image.Image, float, float]]" = OrderedDict()
 
 
 def _layer_key(el: dict, scale: float) -> str:
-    return f"{scale:.5f}|" + json.dumps({k: v for k, v in el.items() if k not in {"x", "y", "id", "locked", "role"}},
-                                         sort_keys=True, ensure_ascii=False)
+    return f"{scale:.5f}|" + json.dumps({k: v for k, v in el.items()
+                                         if k not in {"x", "y", "id", "locked", "role", "group", "anim"}},
+                                        sort_keys=True, ensure_ascii=False)
 
 
 def draw_element(canvas: Image.Image, el: dict, scale: float) -> None:
@@ -91,13 +92,13 @@ def _build(el: dict, scale: float) -> tuple[Image.Image, float, float]:
         layer, (x, y) = line_layer(el, scale)
     else:
         builder = {"text": text_layer, "shape": shape_layer, "image": image_layer, "icon": icon_layer,
-                   "table": table_layer}[el["type"]]
+                   "table": table_layer, "chart": chart_layer, "path": path_layer}[el["type"]]
         layer, pad = builder(el, scale)
         if el.get("rot"):
             layer = layer.rotate(-el["rot"], expand=True, resample=Image.Resampling.BICUBIC)
         cx, cy = model.center(el)
         if el["type"] == "text" and layer.height - 2 * pad > el["h"] * scale + 1 and el.get("valign") == "top" \
-                and not el.get("rot"):
+                and not el.get("rot") and not el.get("curve"):
             # Overflowing text grows downwards from its box, it isn't recentred.
             x, y = el["x"] * scale - pad, el["y"] * scale - pad
         else:
@@ -215,6 +216,51 @@ def _with_shadow(layer: Image.Image, strength: float, scale: float) -> Image.Ima
     return out
 
 
+def pattern_image(size: tuple[int, int], kind: str, colour: str, step: float) -> Image.Image:
+    """A transparent picture covered in a repeating pattern, `step` pixels apart."""
+    w, h = size
+    out = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(out)
+    ink = (*model.rgb(colour), 255)
+    line = max(1, int(round(step * 0.18)))
+    if kind == "stripes":
+        x = -h
+        while x < w + h:
+            draw.line([(x, h), (x + h, 0)], fill=ink, width=max(1, int(step * 0.35)))
+            x += step
+    elif kind == "dots":
+        r = step * 0.17
+        for row, y in enumerate(_steps(step / 2, h + step, step)):
+            for x in _steps(step / 2 + (step / 2 if row % 2 else 0), w + step, step):
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=ink)
+    elif kind == "grid":
+        for x in _steps(0, w + 1, step):
+            draw.line([(x, 0), (x, h)], fill=ink, width=line)
+        for y in _steps(0, h + 1, step):
+            draw.line([(0, y), (w, y)], fill=ink, width=line)
+    elif kind == "checks":
+        for row, y in enumerate(_steps(0, h, step)):
+            for col, x in enumerate(_steps(0, w, step)):
+                if (row + col) % 2 == 0:
+                    draw.rectangle((x, y, x + step - 1, y + step - 1), fill=ink)
+    elif kind == "lines":
+        for y in _steps(step / 2, h + step, step):
+            draw.line([(0, y), (w, y)], fill=ink, width=max(1, int(step * 0.22)))
+    elif kind == "waves":
+        amp = step * 0.22
+        for y in _steps(step / 2, h + step, step):
+            points = [(x, y + amp * math.sin(x / step * 2 * math.pi)) for x in _steps(0, w + 4, max(2.0, step / 8))]
+            draw.line(points, fill=ink, width=max(1, int(step * 0.14)), joint="curve")
+    return out
+
+
+def _steps(start: float, stop: float, step: float):
+    value = start
+    while value < stop:
+        yield value
+        value += step
+
+
 def _pad(el: dict, scale: float) -> int:
     stroke = el.get("stroke_w", 0) * scale if el.get("stroke") else 0
     shadow = 20 * scale if el.get("shadow") else 0
@@ -229,8 +275,18 @@ def shape_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
     stroke = el.get("stroke_w", 0) * scale * AA
     inset = stroke / 2 if el.get("stroke") else 0
     box = (pad * AA + inset, pad * AA + inset, (pad + w) * AA - inset, (pad + h) * AA - inset)
-    draw_shape(ImageDraw.Draw(big), el["shape"], box, el.get("fill"), el.get("stroke"), round(stroke),
-               el.get("radius", 0) * scale * AA)
+    radius = el.get("radius", 0) * scale * AA
+    draw_shape(ImageDraw.Draw(big), el["shape"], box, el.get("fill"), el.get("stroke"), round(stroke), radius)
+    if el.get("pattern", "none") != "none":
+        # The pattern is masked by the shape's inside, then the outline goes back on top of it.
+        inside = Image.new("RGBA", big.size, (0, 0, 0, 0))
+        draw_shape(ImageDraw.Draw(inside), el["shape"], box, "#ffffff", None, 0, radius)
+        tile = pattern_image(big.size, el["pattern"], el.get("pattern_color") or "#ffffff",
+                             max(4.0, el.get("pattern_size", 28) * scale * AA))
+        tile.putalpha(ImageChops.multiply(tile.getchannel("A"), inside.getchannel("A")))
+        big.alpha_composite(tile)
+        if el.get("stroke") and stroke > 0:
+            draw_shape(ImageDraw.Draw(big), el["shape"], box, None, el.get("stroke"), round(stroke), radius)
     layer = big.reduce(AA)
     if el.get("shadow"):
         layer = _with_shadow(layer, 0.35, scale)
@@ -272,14 +328,51 @@ def _char_kind(ch: str) -> str:
     return "text"
 
 
+_GLYPHS: dict[tuple, bool] = {}
+
+
+def has_glyph(font, ch: str) -> bool:
+    """Whether a font draws a character itself rather than its 'missing' box."""
+    key = (getattr(font, "path", id(font)), ch)
+    known = _GLYPHS.get(key)
+    if known is None:
+        try:
+            known = _ink(font, ch) != _ink(font, "\U000F0000")
+        except Exception:
+            known = True
+        _GLYPHS[key] = known
+    return known
+
+
+def _ink(font, ch: str) -> bytes:
+    left, top, right, bottom = font.getbbox(ch)
+    image = Image.new("L", (max(1, int(right - left)) + 2, max(1, int(bottom - top)) + 2), 0)
+    ImageDraw.Draw(image).text((1 - left, 1 - top), ch, font=font, fill=255)
+    return image.tobytes()
+
+
 class Face:
     """A text font plus the symbol and emoji fonts its missing characters fall
     back to: '✓ Excellent' or '📅 Saturday' would otherwise draw boxes, since
-    Pillow has no font fallback of its own."""
+    Pillow has no font fallback of its own. A letter the font lacks (₺ in
+    Constantia, say) comes from Segoe UI instead."""
 
-    def __init__(self, font, size: float):
+    def __init__(self, font, size: float, bold: bool = False, italic: bool = False):
         self.font, self.size = font, size
-        self._sym = self._emo = None
+        self.bold, self.italic = bold, italic
+        self._sym = self._emo = self._plain = None
+
+    @property
+    def plain(self):
+        if self._plain is None:
+            self._plain = fonts.get("Segoe UI", self.size, self.bold, self.italic)
+        return self._plain
+
+    def _kind(self, ch: str) -> str:
+        kind = _char_kind(ch)
+        if kind == "text" and ord(ch) > 0x7F and not has_glyph(self.font, ch):
+            return "plain"
+        return kind
 
     @property
     def sym(self):
@@ -300,7 +393,7 @@ class Face:
         out: list[list] = []
         for ch in text:
             o = ord(ch)
-            if out and (o in JOINERS or 0x1F3FB <= o <= 0x1F3FF or out[-1][0].endswith("‍")):
+            if out and (o in JOINERS or 0x1F3FB <= o <= 0x1F3FF or out[-1][0].endswith("\u200d")):
                 if o == 0xFE0F and out[-1][1] == "symbol":
                     if len(out[-1][0]) > 1:
                         last = out[-1][0][-1]
@@ -310,7 +403,7 @@ class Face:
                         out[-1][1] = "emoji"
                 out[-1][0] += ch
                 continue
-            kind = _char_kind(ch)
+            kind = self._kind(ch)
             if out and out[-1][1] == kind:
                 out[-1][0] += ch
             else:
@@ -325,6 +418,8 @@ class Face:
     def _font_for(self, kind: str):
         if kind == "emoji":
             return self.emo[0]
+        if kind == "plain":
+            return self.plain
         return self.sym if kind == "symbol" else self.font
 
     def getlength(self, text: str) -> float:
@@ -347,7 +442,7 @@ class Face:
 
 
 def face(family: str, size: float, bold: bool = False, italic: bool = False) -> Face:
-    return Face(fonts.get(family, size, bold, italic), size)
+    return Face(fonts.get(family, size, bold, italic), size, bold, italic)
 
 
 def _wrap(text: str, font, width: float) -> list[str]:
@@ -445,7 +540,72 @@ def _text_lines(draw, lines, font: Face, x, top, w, line_h, align, fill, stroke_
             draw.line([(lx, base), (lx + width, base)], fill=fill, width=max(1, int(size * 0.06)))
 
 
+def _units(text: str) -> list[str]:
+    """Characters, with emoji joiners and skin tones kept on the character they belong to."""
+    out: list[str] = []
+    for ch in text:
+        o = ord(ch)
+        if out and (o in JOINERS or 0x1F3FB <= o <= 0x1F3FF or out[-1].endswith("\u200d") or o == 0xFE0E):
+            out[-1] += ch
+        else:
+            out.append(ch)
+    return out
+
+
+def curved_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
+    """Text along an arc: a positive curve arches up like a rainbow, a negative one smiles.
+    ±360 wraps the words all the way round a circle."""
+    w, h = max(1.0, el["w"] * scale), max(1.0, el["h"] * scale)
+    size = max(4.0, el.get("size", 32) * scale)
+    font = face(el.get("font") or "Segoe UI", size, el.get("bold", False), el.get("italic", False))
+    units = _units(" ".join(str(el.get("text", "")).split("\n")))
+    ascent, descent = font.getmetrics()
+    stroke_w = int(round(el.get("stroke_w", 0) * scale)) if el.get("stroke") else 0
+    stroke = (*model.rgb(el["stroke"]), 255) if stroke_w else None
+    colour = (*model.rgb(el.get("color", "#000000")), 255)
+    widths = [font.getlength(u) for u in units]
+    total = max(1.0, sum(widths))
+    curve = el.get("curve", 0.0)
+    sign = 1 if curve > 0 else -1
+    angle = math.radians(max(1.0, abs(curve)))
+    radius = total / angle
+    sag = radius * (1 - math.cos(min(angle / 2, math.pi)))
+    chord = 2 * radius * math.sin(min(angle / 2, math.pi / 2))
+    margin = int(size * 0.5) + stroke_w + (int(size * 0.2) if el.get("shadow") else 0) + 2
+    lw = int(math.ceil(max(w, chord + size * 1.5) + 2 * margin))
+    lh = int(math.ceil(max(h, sag + size * 1.6) + 2 * margin))
+    layer = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+    if el.get("fill"):
+        ImageDraw.Draw(layer).rectangle(((lw - w) / 2, (lh - h) / 2, (lw + w) / 2, (lh + h) / 2),
+                                        fill=(*model.rgb(el["fill"]), 255))
+    words = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+    mid_x, mid_y = lw / 2, lh / 2 - sign * sag / 2
+    centre_y = mid_y + sign * radius
+    pos = -total / 2
+    pad = int(size * 0.3) + stroke_w + 2
+    for unit, width in zip(units, widths):
+        phi = (pos + width / 2) / radius
+        pos += width
+        if not unit.strip():
+            continue
+        glyph = Image.new("RGBA", (int(math.ceil(width)) + 2 * pad, ascent + descent + 2 * pad), (0, 0, 0, 0))
+        font.draw(ImageDraw.Draw(glyph), pad, pad + ascent, unit, colour, stroke_w, stroke)
+        glyph = glyph.rotate(-sign * math.degrees(phi), expand=True, resample=Image.Resampling.BICUBIC)
+        px = mid_x + radius * math.sin(phi)
+        py = centre_y - sign * radius * math.cos(phi)
+        composite(words, glyph, px - glyph.width / 2, py - glyph.height / 2)
+    if el.get("shadow"):
+        shadow = Image.new("RGBA", words.size, (0, 0, 0, 0))
+        shadow.putalpha(words.getchannel("A").point(lambda a: int(a * 0.6)))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, size * 0.04)))
+        composite(layer, shadow, max(1, size * 0.05), max(1, size * 0.05))
+    layer.alpha_composite(words)
+    return layer, margin
+
+
 def text_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
+    if el.get("curve"):
+        return curved_layer(el, scale)
     w, h = max(1.0, el["w"] * scale), max(1.0, el["h"] * scale)
     pad = _pad(el, scale) + int(el.get("size", 32) * scale * 0.15)
     inner_pad = el.get("pad", 0) * scale
@@ -597,7 +757,8 @@ def icon_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
     size = max(4, int(min(w, h) * 0.86))
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    glyph = el.get("glyph") or "⭐"
+    # Without a shaping engine a variation selector draws as a box of its own.
+    glyph = (el.get("glyph") or "⭐").replace("️", "").replace("︎", "") or "⭐"
     if el.get("set") == "color":
         font, colored = fonts.emoji(size)
         if colored:
@@ -656,6 +817,60 @@ def table_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
     for c in range(m + 1):
         draw.line([(min(w, c * cw), 0), (min(w, c * cw), h)], fill=border, width=width)
     return layer, 0
+
+
+# --- charts and pen strokes ------------------------------------------------------------------
+
+def chart_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
+    from . import chart
+
+    return chart.render(el, scale), 0
+
+
+def smooth_points(points: list[tuple[float, float]], closed: bool = False, rounds: int = 2) -> list[tuple[float, float]]:
+    """Chaikin's corner cutting: a shaky mouse line comes out as a smooth curve."""
+    pts = list(points)
+    for _ in range(rounds):
+        if len(pts) < 3:
+            return pts
+        out = [] if closed else [pts[0]]
+        pairs = list(zip(pts, pts[1:] + pts[:1])) if closed else list(zip(pts, pts[1:]))
+        for (x0, y0), (x1, y1) in pairs:
+            out.append((0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1))
+            out.append((0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1))
+        if not closed:
+            out.append(pts[-1])
+        pts = out
+    return pts
+
+
+def path_points(el: dict, w: float, h: float, ox: float = 0.0, oy: float = 0.0) -> list[tuple[float, float]]:
+    points = [(ox + px * w, oy + py * h) for px, py in el.get("points") or []]
+    if el.get("smooth", True) and len(points) > 2:
+        points = smooth_points(points, el.get("closed", False))
+    return points
+
+
+def path_layer(el: dict, scale: float) -> tuple[Image.Image, int]:
+    w, h = max(1.0, el["w"] * scale), max(1.0, el["h"] * scale)
+    width = el.get("stroke_w", 0) * scale if el.get("stroke") else 0.0
+    pad = int(math.ceil(width / 2)) + 2
+    big = Image.new("RGBA", (int(math.ceil(w + 2 * pad)) * AA, int(math.ceil(h + 2 * pad)) * AA), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(big)
+    points = path_points(el, w * AA, h * AA, pad * AA, pad * AA)
+    if len(points) < 2:
+        return big.reduce(AA), pad
+    if el.get("closed") and el.get("fill") and len(points) > 2:
+        draw.polygon(points, fill=(*model.rgb(el["fill"]), 255))
+    if width > 0:
+        ink = (*model.rgb(el["stroke"]), 255)
+        line = max(1, int(round(width * AA)))
+        draw.line(points + ([points[0]] if el.get("closed") else []), fill=ink, width=line, joint="curve")
+        if not el.get("closed"):
+            r = line / 2
+            for x, y in (points[0], points[-1]):
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=ink)
+    return big.reduce(AA), pad
 
 
 # --- lines -----------------------------------------------------------------------------------
