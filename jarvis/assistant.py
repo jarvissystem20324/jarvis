@@ -1059,8 +1059,14 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
         results.append((not high, "security scan: no high-severity findings" if not high
                         else f"security scan: {len(high)} high — run /scan {root}"))
 
-        command = [_sys.executable, "-m", "pytest", "-q", "-o", "addopts="]
-        if not security.permissions.ask(security.RUN_TESTS, " ".join(command), context="/release"):
+        # In the EXE, sys.executable is JARVIS.exe: "-m pytest" would just open a second JARVIS.
+        from .devtools import find_python
+
+        python = find_python()
+        command = [python or "python", "-m", "pytest", "-q", "-o", "addopts="]
+        if python is None:
+            results.append((False, "tests: no Python found to run them with"))
+        elif not security.permissions.ask(security.RUN_TESTS, " ".join(command), context="/release"):
             results.append((False, "tests: not run (denied)"))
         else:
             try:

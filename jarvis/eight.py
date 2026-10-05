@@ -38,7 +38,20 @@ class Eight(Makers, Study, Life, Live, PCTools, Guard, DevTools, Social, Designe
         method = registry.COMMANDS.get(name)
         if method is None:
             return None
-        return getattr(self, method)(args, routed)
+        try:
+            return getattr(self, method)(args, routed)
+        except Exception as exc:
+            # 10.0.1: a slip in a command (text where it wanted a number, a program that
+            # wouldn't start) used to reach the chat as a bare Python error. Now it's logged
+            # for /errors, and the person sees what went wrong and how the command is used.
+            from . import errorlog
+
+            line = errorlog.record(f"/{name} {args[:80]}".strip(), exc)
+            if routed:
+                return None          # a sentence that only looked like this command: let the AI answer it
+            usage = next((t.usage for t in registry.TOOLS.values() if name in t.names), "")
+            return (f"⚠ /{name} couldn't do that ({line})." + (f"\nUsage: {usage}" if usage else "")
+                    + "\nThe details are in /errors.")
 
     def on_fire(self, item) -> str:
         if item.kind == "dnd":

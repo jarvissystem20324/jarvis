@@ -108,7 +108,7 @@ class Travel10:
         where, days, people, style = split(args, 4)
         if not where.strip():
             return "Usage: /tripbudget Rome | 5 | 2 | mid"
-        days_n, people_n = int(days or 5), int(people or 2)
+        days_n, people_n = kit.whole(days, 5, 1, 365), kit.whole(people, 2, 1, 500)
         try:
             data = kit.ask_json(self.brain, (
                 f"Estimate a {style.strip() or 'mid'}-range trip to {where.strip()} for {people_n} people, {days_n} "

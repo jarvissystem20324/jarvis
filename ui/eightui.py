@@ -94,6 +94,11 @@ class EightUI:
         canvas = getattr(self, "_avatar", None)
         if canvas is None or not canvas.winfo_exists():
             return
+        # Nothing to draw while minimized, or while the window is being dragged or resized.
+        settled = getattr(self, "window_settled", lambda: True)
+        if not settled() or self.state() == "iconic" or not canvas.winfo_ismapped():
+            self.after(150, self._avatar_tick)
+            return
         colors = _ui().COLORS
         state = self._avatar_state()
         self._avatar_phase += 0.12

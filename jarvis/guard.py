@@ -343,9 +343,13 @@ def suspicious_processes() -> list[tuple[str, int, str, list[str]]]:
         if paths:
             quoted = ",".join("'" + p.replace("'", "''") + "'" for p in paths)
             try:
+                # UTF-8 both ways: a path with ş or ı (a Turkish user name) otherwise came back in the
+                # console code page, never matched, and the program was wrongly called unsigned.
                 out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                      "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
                                       f"@({quoted}) | % {{ (Get-AuthenticodeSignature $_).Status.ToString() + '|' + $_ }}"],
-                                     capture_output=True, text=True, timeout=40, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                     capture_output=True, text=True, timeout=40, encoding="utf-8", errors="replace",
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 signed = {line.split("|", 1)[1].lower() for line in out.stdout.splitlines() if line.startswith("Valid|")}
                 flagged = [(n, pid, exe, reasons + ([] if exe.lower() in signed else ["not digitally signed"]))
                            for n, pid, exe, reasons in flagged]

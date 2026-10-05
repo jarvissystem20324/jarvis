@@ -39,7 +39,10 @@ def _windows_only() -> str | None:
 
 
 def powershell(script: str, timeout: float = 30) -> str:
-    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+    # Windows PowerShell writes to a pipe in the console's OEM code page (857 on Turkish
+    # Windows), so ş, ğ and ı came back as "�" until it was told to write UTF-8.
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                             "[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + script],
                             capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW,
                             encoding="utf-8", errors="replace")
     return result.stdout.strip()
@@ -336,8 +339,12 @@ def set_startup(entry: dict, enabled: bool) -> None:
 
 
 def wifi_info() -> dict:
-    out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True,
-                         creationflags=NO_WINDOW, encoding="utf-8", errors="replace").stdout
+    """Windows' view of the Wi-Fi connection; {} when there's no netsh (macOS) or it doesn't answer."""
+    try:
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=15,
+                             creationflags=NO_WINDOW, encoding="utf-8", errors="replace").stdout or ""
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
     fields: dict[str, str] = {}
     for line in out.splitlines():
         if ":" in line:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import concurrent.futures as futures
 import re
 
-from .. import providers, security, shield
+from .. import kit, providers, security, shield
 from ..registry import command, field, split
 
 G = "Chat and AI"
@@ -138,7 +138,7 @@ class AIHelp:
         topic, rounds = split(args, 2)
         if not topic:
             return "Usage: /debate <statement> | 2"
-        rounds = max(1, min(4, int(rounds or 2)))
+        rounds = kit.whole(rounds, 2, 1, 4)
         sides = configured_providers(2)
         transcript: list[tuple[str, str]] = []
 
@@ -207,3 +207,32 @@ class AIHelp:
         wrapped, _ = shield.wrap(text[:12000], "the selected text")
         return self.brain.ask_once(f"{shield.RULE}\nThe user selected this text in another app:\n{wrapped}\n\n"
                                    f"Their question: {question or 'Explain this briefly.'}\nAnswer briefly.").strip()
+
+    @command("errors", "errorlog", group=G, usage="/errors [open|clear]",
+             help="what went wrong inside JARVIS lately (the error log, for reporting a bug)", title="Error log",
+             icon="🐞", page="memory",
+             fields=(field("action", "choice", "Show", "recent", ("recent", "open", "clear")),))
+    def errors_cmd(self, args: str, routed: bool = False):
+        from .. import errorlog
+
+        word = args.strip().lower()
+        path = errorlog.log_path()
+        if word == "clear":
+            path.unlink(missing_ok=True)
+            errorlog._seen.clear()
+            return "🐞 Error log cleared."
+        if word == "open":
+            if not path.exists():
+                return "🐞 No errors logged."
+            from ..pc import open_path
+
+            open_path(path)
+            return f"🐞 Opened {path}"
+        lines = errorlog.recent(10)
+        if not lines and path.exists():
+            blocks = path.read_text(encoding="utf-8", errors="replace").strip().split("\n=== ")[-10:]
+            lines = [b.splitlines()[0].lstrip("= ") + "  " + b.strip().splitlines()[-1][:160] for b in reversed(blocks)]
+        if not lines:
+            return "🐞 No errors logged. Everything has worked so far."
+        return "🐞 Recent errors (newest first) — the full details are in:\n" + f"  {path}\n" + "\n".join(
+            f"  • {line}" for line in lines)

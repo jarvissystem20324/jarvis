@@ -72,6 +72,20 @@ def _make_placeholder_logo(size: int = 96) -> Image.Image:
 class JarvisApp(EightUI, TenUI, ctk.CTk):
     def __init__(self):
         super().__init__()
+        # 10.0.1: a windowed EXE has no console, so errors in callbacks and threads
+        # are logged (and noticed) instead of silently doing nothing.
+        from jarvis import errorlog
+
+        errorlog.install(self)
+        # 10.0.1: animations (the orbs, the avatar ring) pause while the window is being
+        # dragged or resized. The floating orb is a see-through, always-on-top window; its
+        # 20 redraws a second held a window drag to 20 frames a second.
+        self._settle_at = 0.0
+        self._last_geometry = None
+        self.bind("<Configure>", self._window_changed, add="+")
+        from ui import orb as orb_module
+
+        orb_module.PAUSED = lambda: not self.window_settled()
 
         self.title(f"JARVIS {__version__}")
         self.geometry("1100x720")
@@ -1185,6 +1199,19 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
         render.configure_tags(textbox, COLORS, getattr(self, "_font_size", FONT_SIZE))
         self._style_tags(textbox)
+
+    def _window_changed(self, event) -> None:
+        """The window moved or changed size (child widgets' Configure events land here too; skip those)."""
+        if event.widget is not self:
+            return
+        geometry = (event.x, event.y, event.width, event.height)
+        if self._last_geometry is not None and geometry != self._last_geometry:
+            self._settle_at = time.monotonic() + 0.4
+        self._last_geometry = geometry
+
+    def window_settled(self) -> bool:
+        """False while the window is being dragged or resized (and for a moment after)."""
+        return time.monotonic() >= self._settle_at
 
     def design_page(self):
         """The Design page, built on first use: most sessions never open it."""

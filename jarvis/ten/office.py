@@ -869,14 +869,27 @@ def resolve_link(path: Path) -> Path:
     """The file a .lnk points to (or the path itself)."""
     if path.suffix.lower() != ".lnk" or os.name != "nt":
         return path
+    # pywin32, not comtypes: comtypes hands back a bare IDispatch for WScript.Shell, without
+    # .TargetPath, so every shortcut came back unresolved. Each thread needs COM set up.
     try:
-        import comtypes.client
-
-        shell = comtypes.client.CreateObject("WScript.Shell")
-        target = shell.CreateShortcut(str(path)).TargetPath
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return path
+    started = False
+    try:
+        pythoncom.CoInitialize()
+        started = True
+    except Exception:
+        pass
+    try:
+        target = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(path)).TargetPath
         return Path(target) if target else path
     except Exception:
         return path
+    finally:
+        if started:
+            pythoncom.CoUninitialize()
 
 
 class Office:

@@ -51,6 +51,18 @@ class Store:
         vault.write_json(self.path, data)
 
 
+def whole(text, default: int, low: int | None = None, high: int | None = None) -> int:
+    """The first whole number in a command's argument — '15', '15 questions', ' 2 ' — or the default
+    when there isn't one ('test', ''), kept between low and high. Never raises on what a person typed."""
+    match = re.search(r"-?\d+", str(text or ""))
+    value = int(match.group()) if match else default
+    if low is not None:
+        value = max(low, value)
+    if high is not None:
+        value = min(high, value)
+    return value
+
+
 def get_json(url: str, params: dict | None = None, headers: dict | None = None, timeout: float = 15):
     full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
     try:

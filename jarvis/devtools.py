@@ -408,11 +408,14 @@ dependencies to install.
         if empty:
             lines.append(f"  empty in .env: {', '.join(empty)}")
         gitignore = root / ".gitignore"
-        if env.exists() and (not gitignore.exists() or not re.search(r"^\s*\.env\s*$|^\s*\.env\*|^\s*\*\.env", gitignore.read_text(errors="replace"), re.M)):
+        if env.exists() and (not gitignore.exists() or not re.search(r"^\s*\.env\s*$|^\s*\.env\*|^\s*\*\.env", gitignore.read_text(encoding="utf-8", errors="replace"), re.M)):
             lines.append("  ⚠ .env is not in .gitignore — add it before you commit.")
         if env.exists() and shutil.which("git"):
-            tracked = subprocess.run(["git", "ls-files", "--error-unmatch", ".env"], cwd=root, capture_output=True,
-                                     creationflags=NO_WINDOW).returncode == 0
+            try:
+                tracked = subprocess.run(["git", "ls-files", "--error-unmatch", ".env"], cwd=root, capture_output=True,
+                                         timeout=20, creationflags=NO_WINDOW).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                tracked = False
             if tracked:
                 lines.append("  🚨 .env is committed to git! Remove it (git rm --cached .env) and rotate every key in it.")
         lines.append("(Values are never read out.)")

@@ -69,6 +69,8 @@ def run_program(argv: list[str], cwd: Path | None = None, timeout: int = 60, std
         raise CodingError(f"{argv[0]} isn't installed (or isn't on PATH).") from None
     except subprocess.TimeoutExpired:
         return -1, f"(stopped after {timeout} s)"
+    except OSError as exc:                     # there, but it wouldn't start (blocked, needs admin…)
+        raise CodingError(f"{Path(argv[0]).name} wouldn't start: {exc}") from None
     out = proc.stdout.decode("utf-8", "replace") + proc.stderr.decode("utf-8", "replace")
     return proc.returncode, out[-20000:]
 
@@ -83,7 +85,11 @@ def python_for(folder: Path | None) -> str:
             if candidate.exists():
                 return str(candidate)
     if getattr(sys, "frozen", False):
-        return shutil.which("python") or shutil.which("py") or "python"
+        # Not shutil.which("python") alone: on many PCs that's the Microsoft Store's stub,
+        # which opens the Store instead of running anything.
+        from ..devtools import find_python
+
+        return find_python() or "python"
     return sys.executable
 
 
@@ -295,7 +301,11 @@ def _snake(name: str) -> str:
 
 
 def json_to_types(data, language: str = "python", root: str = "Root") -> str:
-    language = language.lower()
+    language = language.lower().strip()
+    language = {"py": "python", "ts": "typescript", "golang": "go", "c#": "csharp", "cs": "csharp"}.get(language,
+                                                                                                    language)
+    if language not in {"python", "typescript", "go", "csharp", "java"}:
+        raise CodingError(f"I can write types for python, typescript, go, csharp or java — not '{language}'.")
     classes: list[tuple[str, list[tuple[str, str, bool]]]] = []
 
     def kind(value, name: str) -> str:
@@ -1013,21 +1023,25 @@ class Coding:
         except CodingError:
             root = None
         python = python_for(root)
-        if verb in {"list", "outdated"}:
-            argv = [python, "-m", "pip", "list", "--disable-pip-version-check"] + (["--outdated"] if verb == "outdated" else [])
-            code, out = run_program(argv, timeout=120)
-            return f"📦 {python}\n" + out
-        if not re.fullmatch(r"[A-Za-z0-9._\-\[\],<>=!~ ]{1,120}", package or ""):
-            return "Give a package name, e.g. /pip install requests"
-        if verb == "show":
-            return run_program([python, "-m", "pip", "show", package], timeout=60)[1]
-        if verb not in {"install", "uninstall"}:
-            return "Usage: /pip list|outdated|show|install|uninstall <package>"
-        argv = [python, "-m", "pip", verb, "--disable-pip-version-check"] + (["-y"] if verb == "uninstall" else []) + \
-            package.split()
-        if not security.permissions.ask(security.RUN_COMMAND, " ".join(argv), context="/pip"):
-            return "Nothing installed."
-        code, out = run_program(argv, timeout=600)
+        try:
+            if verb in {"list", "outdated"}:
+                argv = [python, "-m", "pip", "list", "--disable-pip-version-check"] + \
+                    (["--outdated"] if verb == "outdated" else [])
+                code, out = run_program(argv, timeout=120)
+                return f"📦 {python}\n" + out
+            if not re.fullmatch(r"[A-Za-z0-9._\-\[\],<>=!~ ]{1,120}", package or ""):
+                return "Give a package name, e.g. /pip install requests"
+            if verb == "show":
+                return run_program([python, "-m", "pip", "show", package], timeout=60)[1]
+            if verb not in {"install", "uninstall"}:
+                return "Usage: /pip list|outdated|show|install|uninstall <package>"
+            argv = [python, "-m", "pip", verb, "--disable-pip-version-check"] + \
+                (["-y"] if verb == "uninstall" else []) + package.split()
+            if not security.permissions.ask(security.RUN_COMMAND, " ".join(argv), context="/pip"):
+                return "Nothing installed."
+            code, out = run_program(argv, timeout=600)
+        except CodingError as exc:
+            return f"📦 {exc}"
         security.audit.record("pip", f"{verb} {package}", f"exit {code}")
         return ("📦 " if code == 0 else "⚠ ") + out[-3000:]
 
@@ -1083,7 +1097,10 @@ class Coding:
                     break
         if not code_cli:
             return "VS Code isn't installed (or `code` isn't on PATH). Get it from code.visualstudio.com."
-        subprocess.Popen([code_cli, target], creationflags=NO_WINDOW)
+        try:
+            subprocess.Popen([code_cli, target], creationflags=NO_WINDOW)
+        except OSError as exc:
+            return f"VS Code wouldn't start: {exc}"
         return f"🟦 Opened {target} in VS Code."
 
     @command("pydoc", "pyhelp", group=G, usage="/pydoc <name>   e.g. /pydoc str.split · /pydoc pathlib",

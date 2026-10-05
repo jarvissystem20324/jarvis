@@ -646,6 +646,8 @@ class System:
                     f"  {r.get('Name', '')[:40]}" for r in rows[:60])
         except FileNotFoundError as exc:
             return str(exc)
+        except OSError as exc:                 # there, but it wouldn't start (blocked, broken install…)
+            return f"winget wouldn't start: {exc}"
         except subprocess.TimeoutExpired:
             return "winget took too long."
         return "Usage: /winget search|install|upgrades|list"

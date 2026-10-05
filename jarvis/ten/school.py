@@ -840,7 +840,7 @@ class School:
         except PermissionError as exc:
             return str(exc)
         wrapped = shield.wrap(material[:40000], label)[0] if label else ""
-        n = max(3, min(50, int(count or 15)))
+        n = kit.whole(count, 15, 3, 50)
         with kit.more_room(self.brain):
             data = kit.ask_json(self.brain, (
                 f"Write a practice test with {n} {kind or 'mixed'} questions "
@@ -1087,7 +1087,7 @@ class School:
     def worksheet_cmd(self, args: str, routed: bool = False):
         topic, level, count = split(args, 3)
         try:
-            problems = worksheet(topic or "multiplication", level or "easy", max(4, min(60, int(count or 20))))
+            problems = worksheet(topic or "multiplication", level or "easy", kit.whole(count, 20, 4, 60))
         except ValueError as exc:
             return str(exc)
         path = worksheet_pdf(f"{(topic or 'multiplication').capitalize()} ({level or 'easy'})", problems)
