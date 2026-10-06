@@ -105,6 +105,7 @@ def test_a_reinstall_keeps_the_settings_already_there(installer, tmp_path):
 def test_a_copy_started_on_an_old_versions_files_restarts_clean(monkeypatch, tmp_path):
     """Before 9.9.1 the updater handed the new version the old one's
     environment, so it ran on the old unpacked files in Temp."""
+    import os
     import subprocess
     import sys
     import tempfile
@@ -112,7 +113,7 @@ def test_a_copy_started_on_an_old_versions_files_restarts_clean(monkeypatch, tmp
     import app
 
     started = []
-    monkeypatch.setattr(sys, "_MEIPASS", str(tempfile.gettempdir()) + "\\_MEI12345", raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", os.path.join(tempfile.gettempdir(), "_MEI12345"), raising=False)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(subprocess, "Popen", lambda args, **k: started.append((args, k["env"])))
     monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "old")
