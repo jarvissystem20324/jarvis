@@ -73,6 +73,7 @@ PROVIDER_FIELDS = (
     ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "32 hex characters"),
     ("OPENROUTER_API_KEY", "OpenRouter  (free)", "sk-or-..."),
     ("BLUEMINDS_API_KEY", "Blueminds  (paid relay)", "sk-..."),
+    ("LLMSRELAY_API_KEY", "LLMsRelay  (paid relay, coding agent)", "sk-cs4-..."),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "sk-..."),
 )
 
@@ -85,9 +86,12 @@ KEY_PREFIXES = {
 }
 REG_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"
 
-# Where installed copies look for updates. Set this to your manifest URL before
-# building the installer; blank simply disables update checks.
-UPDATE_URL = os.environ.get("JARVIS_UPDATE_URL", "")
+# Where installed copies look for updates. Until 10.0.2 this came from the
+# environment the installer *ran* in, which is empty on everyone's PC but the
+# developer's, so every copy it installed had a blank address and never
+# updated. JARVIS_UPDATE_URL still overrides it (for a private mirror).
+DEFAULT_UPDATE_URL = "https://github.com/jarvissystem20324/jarvis/releases/latest/download/update.json"
+UPDATE_URL = os.environ.get("JARVIS_UPDATE_URL", "").strip() or DEFAULT_UPDATE_URL
 
 COLORS = {
     "bg": "#0a0e17",
@@ -191,6 +195,52 @@ def read_install_location() -> Path | None:
         return None
 
 
+def write_env(env_path: Path, api_keys: dict[str, str]) -> None:
+    """Write the settings file, keeping one that is already there.
+
+    Before 10.0.2 this always started from nothing and wrote four keys: a
+    reinstall wiped every key, and keys typed for Inception, Mistral,
+    Cloudflare, OpenRouter or the relays were dropped. Now every key typed is
+    saved, an existing file keeps its other lines, and a blank update address
+    is filled in.
+    """
+    typed = {name: api_keys.get(name, "").strip() for name, _label, _hint in PROVIDER_FIELDS}
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        wanted = {name: value for name, value in typed.items() if value}
+        seen: set[str] = set()
+        for index, line in enumerate(lines):
+            name, sep, value = line.partition("=")
+            name = name.strip()
+            if not sep or name.startswith("#"):
+                continue
+            seen.add(name)
+            if name in wanted:
+                lines[index] = f"{name}={wanted[name]}"
+            elif name == "JARVIS_UPDATE_URL" and not value.strip():
+                lines[index] = f"JARVIS_UPDATE_URL={UPDATE_URL}"
+        lines += [f"{name}={value}" for name, value in wanted.items() if name not in seen]
+        if "JARVIS_UPDATE_URL" not in seen:
+            lines.append(f"JARVIS_UPDATE_URL={UPDATE_URL}")
+    else:
+        lines = [
+            "# Providers. JARVIS tries them in order and moves on when one",
+            "# fails, so more than one key means a dead key never stops it.",
+            *(f"{name}={value}" for name, value in typed.items()),
+            "",
+            "JARVIS_PROVIDER=auto",
+            "# 'auto' means free: an OpenAI key on file is not consent to",
+            "# bill it for every image.",
+            "JARVIS_IMAGE_PROVIDER=auto",
+            "JARVIS_STT_PROVIDER=auto",
+            "",
+            "JARVIS_VOICE=false",
+            "JARVIS_HOTKEY=ctrl+alt+j",
+            f"JARVIS_UPDATE_URL={UPDATE_URL}",
+        ]
+    env_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 # --------------------------------------------------------------------------
 # install / uninstall
 # --------------------------------------------------------------------------
@@ -227,30 +277,7 @@ def do_install(
     env_path = install_dir / ".env"
     supplied = sum(1 for v in api_keys.values() if v.strip())
     log(f"Configured {supplied} provider key{'s' if supplied != 1 else ''}.")
-    env_path.write_text(
-        "\n".join(
-            [
-                "# Providers. JARVIS tries them in order and moves on when one",
-                "# fails, so more than one key means a dead key never stops it.",
-                f"GEMINI_API_KEY={api_keys.get('GEMINI_API_KEY', '').strip()}",
-                f"GROQ_API_KEY={api_keys.get('GROQ_API_KEY', '').strip()}",
-                f"NVIDIA_API_KEY={api_keys.get('NVIDIA_API_KEY', '').strip()}",
-                f"OPENAI_API_KEY={api_keys.get('OPENAI_API_KEY', '').strip()}",
-                "",
-                "JARVIS_PROVIDER=auto",
-                "# 'auto' means free: an OpenAI key on file is not consent to",
-                "# bill it for every image.",
-                "JARVIS_IMAGE_PROVIDER=auto",
-                "JARVIS_STT_PROVIDER=auto",
-                "",
-                "JARVIS_VOICE=false",
-                "JARVIS_HOTKEY=ctrl+alt+j",
-                f"JARVIS_UPDATE_URL={UPDATE_URL}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    write_env(env_path, api_keys)
     (install_dir / "output" / "images").mkdir(parents=True, exist_ok=True)
 
     log("Installing uninstaller...")

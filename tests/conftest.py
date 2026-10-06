@@ -27,6 +27,14 @@ if str(ROOT) not in sys.path:
 # Set for the whole run, fixture or not: a routing test that reaches
 # /power by mistake must log "shutdown /s", not shut the developer's PC down.
 os.environ["JARVIS_POWER_DRYRUN"] = "1"
+# Paid per call, and the developer's real .env loads underneath the tests.
+# Set before it loads (load_dotenv never overrides), so no test can spend
+# Firecrawl credit or Claude Opus tokens; tests that need a key set a fake.
+os.environ["FIRECRAWL_API_KEY"] = ""
+os.environ["LLMSRELAY_API_KEY"] = ""
+# Since 10.0.2 a blank address means GitHub's; no window a test opens should
+# go looking for an update.
+os.environ["JARVIS_UPDATE_URL"] = "off"
 
 
 def fake_key(prefix: str, body: str = "AbCdEf0123456789AbCdEf0123456789") -> str:

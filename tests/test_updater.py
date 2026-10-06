@@ -50,6 +50,95 @@ def test_junk_before_the_address_is_named():
         updater._require_https("update https://github.com/x/u.json", "Update URL")
 
 
+@pytest.mark.parametrize("value,expected", [
+    ("", updater.DEFAULT_UPDATE_URL),             # what JARVIS-Setup wrote until 10.0.2
+    ("https://mirror.test/u.json", "https://mirror.test/u.json"),
+    ("off", ""), ("OFF", ""),
+])
+def test_a_blank_update_address_means_the_built_in_one(monkeypatch, value, expected):
+    """A friend's 9.0.1, installed with JARVIS-Setup, had a blank address
+    and never saw an update."""
+    monkeypatch.setenv("JARVIS_UPDATE_URL", value)
+    assert updater.get_update_url() == expected
+
+
+# --- the installer's settings file -------------------------------------------
+
+@pytest.fixture
+def installer(monkeypatch):
+    pytest.importorskip("winreg", reason="the installer is Windows-only")
+    import installer
+
+    # Read from the environment at import, where the conftest says "off".
+    monkeypatch.setattr(installer, "UPDATE_URL", installer.DEFAULT_UPDATE_URL)
+    return installer
+
+
+def test_the_installer_and_the_app_agree_where_updates_are(installer):
+    assert installer.DEFAULT_UPDATE_URL == updater.DEFAULT_UPDATE_URL
+
+
+def test_a_new_install_saves_every_key_and_the_update_address(installer, tmp_path):
+    env = tmp_path / ".env"
+    typed = {name: f"key-for-{name.lower()}" for name, _l, _h in installer.PROVIDER_FIELDS}
+    installer.write_env(env, typed)
+    text = env.read_text(encoding="utf-8")
+    for name, value in typed.items():
+        assert f"{name}={value}\n" in text
+    assert f"JARVIS_UPDATE_URL={updater.DEFAULT_UPDATE_URL}\n" in text
+
+
+def test_a_reinstall_keeps_the_settings_already_there(installer, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("# mine\nGROQ_API_KEY=old-groq\nJARVIS_VOICE=true\nJARVIS_UPDATE_URL=\n"
+                   "MISTRAL_API_KEY=kept\n", encoding="utf-8")
+    installer.write_env(env, {"GROQ_API_KEY": "new-groq", "MISTRAL_API_KEY": "", "OPENROUTER_API_KEY": "or"})
+    lines = env.read_text(encoding="utf-8").splitlines()
+    assert lines[:3] == ["# mine", "GROQ_API_KEY=new-groq", "JARVIS_VOICE=true"]
+    assert f"JARVIS_UPDATE_URL={updater.DEFAULT_UPDATE_URL}" in lines
+    assert "MISTRAL_API_KEY=kept" in lines          # left blank in the installer: not wiped
+    assert "OPENROUTER_API_KEY=or" in lines
+
+
+# --- started by an old updater -------------------------------------------------
+
+def test_a_copy_started_on_an_old_versions_files_restarts_clean(monkeypatch, tmp_path):
+    """Before 9.9.1 the updater handed the new version the old one's
+    environment, so it ran on the old unpacked files in Temp."""
+    import subprocess
+    import sys
+    import tempfile
+
+    import app
+
+    started = []
+    monkeypatch.setattr(sys, "_MEIPASS", str(tempfile.gettempdir()) + "\\_MEI12345", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: started.append((args, k["env"])))
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "old")
+    monkeypatch.delenv("JARVIS_FRESH_START", raising=False)
+    assert app._restart_if_in_old_files() is True
+    args, env = started[0]
+    assert args[0] == sys.executable
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1" and "_PYI_APPLICATION_HOME_DIR" not in env
+    # The fresh copy carries a marker, so it can never loop.
+    monkeypatch.setenv("JARVIS_FRESH_START", "1")
+    assert app._restart_if_in_old_files() is False and len(started) == 1
+
+
+def test_a_normal_start_is_left_alone(monkeypatch):
+    import subprocess
+    import sys
+
+    import app
+
+    monkeypatch.setattr(sys, "_MEIPASS", "C:\\Users\\x\\AppData\\Local\\JARVIS\\runtime\\_MEI1", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("restarted"))
+    monkeypatch.delenv("JARVIS_FRESH_START", raising=False)
+    assert app._restart_if_in_old_files() is False
+
+
 # --- a fake server ---------------------------------------------------------
 
 class _Response(io.BytesIO):

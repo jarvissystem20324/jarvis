@@ -18,7 +18,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from jarvis import i18n, modes, providers
+from jarvis import i18n, modes, providers, websearch
 from jarvis.config import get_base_dir
 
 # (env var, label, where to get one, free?)
@@ -34,6 +34,9 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("OPENAI_API_KEY", "OpenAI  (paid)", "platform.openai.com/api-keys", False),
     ("BLUEMINDS_API_KEY", "Blueminds  (paid relay)",
      "api.bluesminds.com/console/token", False),
+    ("LLMSRELAY_API_KEY", "LLMsRelay  (paid relay, coding agent)", "llmsrelay.com", False),
+    # Not a chat provider: web search, tested and counted on its own.
+    ("FIRECRAWL_API_KEY", "Firecrawl  (web search)", "firecrawl.dev/app/api-keys", False),
 )
 
 _SETTING = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
@@ -500,6 +503,21 @@ class SettingsWindow(ctk.CTkToplevel):
             return
         label.configure(text="testing…", text_color=self.colors["muted"])
 
+        if env_name == websearch.FIRECRAWL_ENV:
+            def check():
+                # The credit balance: proves the key and costs no credit.
+                try:
+                    result = (websearch.firecrawl_status(key), self.colors["ok"])
+                except websearch.SearchError as exc:
+                    result = (str(exc)[:60], self.colors["error"])
+                try:
+                    self.after(0, lambda: label.configure(text=result[0], text_color=result[1]))
+                except Exception:
+                    pass
+
+            threading.Thread(target=check, daemon=True).start()
+            return
+
         provider = next(
             (p for p in providers.CHAT_PROVIDERS if p.key_env == env_name or env_name in p.needs_env), None
         )
@@ -567,7 +585,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def _refresh_summary(self) -> None:
         filled = sum(
             1 for name, e in self.entries.items()
-            if name.endswith("_API_KEY") and e.get().strip()
+            if name.endswith("_API_KEY") and name != websearch.FIRECRAWL_ENV and e.get().strip()
         )
         if filled >= 2:
             self.summary.configure(
@@ -609,6 +627,7 @@ class SettingsWindow(ctk.CTkToplevel):
             else:
                 os.environ.pop(name, None)
         providers.reset_clients()
+        websearch.reset()
         # New clients are not enough: a provider demoted earlier in the
         # session because its key was rejected stays demoted, so the key the
         # user just fixed would go untried until the next restart.

@@ -99,8 +99,16 @@ def current_version() -> str:
     return __version__
 
 
+# Where every copy looks unless .env says otherwise; "off" switches checks
+# off. Until 10.0.2 there was no default, and the installer wrote
+# JARVIS_UPDATE_URL from its own environment, which is empty on every PC but
+# the developer's: a copy put on with JARVIS-Setup.exe never saw an update.
+DEFAULT_UPDATE_URL = "https://github.com/jarvissystem20324/jarvis/releases/latest/download/update.json"
+
+
 def get_update_url() -> str:
-    return get_setting("JARVIS_UPDATE_URL", "")
+    value = get_setting("JARVIS_UPDATE_URL", DEFAULT_UPDATE_URL)
+    return "" if value.lower() in {"off", "none", "no", "false", "0"} else value
 
 
 def parse_version(text: str) -> tuple[int, ...]:

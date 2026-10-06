@@ -211,7 +211,7 @@ class Agent:
         self.plan: Plan | None = None
         # Every model that did some of the work, in order, for the report.
         self.models_used: list[str] = []
-        # Why the agent's own model (GLM-5 Turbo by default) was passed over.
+        # Why the agent's own model (Claude Opus 4.6 by default) was passed over.
         self.fallback_note = ""
         self.root: Path | None = None
         self.written: list[tuple[Path, Path | None]] = []
@@ -275,7 +275,7 @@ class Agent:
     def _ask(self, prompt: str) -> str:
         """One model call, on the agent's own model when it answers.
 
-        JARVIS_AGENT_MODEL names it (GLM-5 Turbo through Blueminds by
+        JARVIS_AGENT_MODEL names it (Claude Opus 4.6 through LLMsRelay by
         default). If that model refuses or stays silent, the brain skips it
         for the session and the current mode's models answer instead.
         """

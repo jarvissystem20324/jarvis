@@ -199,10 +199,10 @@ BLUEMINDS = Provider(
     # but gpt-5.5, kimi-k2.5, gemma-4-26b and gpt-oss-20b all timed out at the
     # relay's own gateway (504), and two listed models answered 410 "reached
     # its end of life on 2026-08-26" — its catalogue is a month stale.
-    # GLM-5 Turbo, reached through Blueminds' OpenRouter channel, is the
-    # user's choice for the coding agent. Blueminds has not enabled it yet
-    # ("has not been priced by the administrator"), and refuses it
-    # instantly, so the agent falls straight through in the meantime.
+    # GLM-5 Turbo, reached through Blueminds' OpenRouter channel, was the
+    # user's choice for the coding agent until 10.0.2. Blueminds never
+    # enabled it ("has not been priced by the administrator"); Claude Opus
+    # 4.6 on LLMsRelay (below) took its place.
     #
     # 2026-10-01, with $100 of credit on the account: the user asked for
     # meta/llama-3.1-8b-instruct, which Blueminds retired on 2026-08-26 (410),
@@ -216,12 +216,31 @@ BLUEMINDS = Provider(
     vision=True,
     free=False,
     signup="https://api.bluesminds.com/console/token",
-    notes="Paid relay. Llama 3.2 11B (sees images); runs the coding agent (GLM-5 Turbo) once enabled.",
+    notes="Paid relay. Llama 3.2 11B (sees images).",
+)
+
+LLMSRELAY = Provider(
+    name="llmsrelay",
+    label="LLMsRelay",
+    base_url="https://api.llmsrelay.com/v1",
+    key_env="LLMSRELAY_API_KEY",
+    # Another relay: it resells Anthropic's Claude, so a prompt passes through
+    # its servers as well as Anthropic's. Measured on 2026-10-06 with the
+    # user's key: nine Claude models listed, and claude-opus-4.6 answered in
+    # 2-9 s, reporting itself as anthropic.claude-opus-4-6. The user chose it
+    # for the coding agent (modes.AGENT_DEFAULT). Opus is billed per token,
+    # so ordinary chat never reaches it unless promoted:
+    #     JARVIS_EXTRA_PROVIDERS=llmsrelay
+    chat_model="claude-opus-4.6",
+    free=False,
+    signup="https://llmsrelay.com",
+    notes="Paid relay. Claude Opus 4.6 runs the coding agent; ordinary chat doesn't use it.",
 )
 
 # Every provider JARVIS knows how to talk to.
 CHAT_PROVIDERS: tuple[Provider, ...] = (
     GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, OPENAI, POLLINATIONS, BLUEMINDS,
+    LLMSRELAY,
 )
 
 # Those tried automatically. Pollinations is excluded: as of August 2026 its
@@ -240,7 +259,10 @@ AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
 # seconds to fail would add those 90 seconds to every failover, so an
 # unreliable one has to be promoted deliberately:
 #     JARVIS_EXTRA_PROVIDERS=blueminds
-OPT_IN_PROVIDERS: tuple[Provider, ...] = ()
+# LLMsRelay is here for cost rather than speed: Claude Opus is for the
+# coding agent, which names it directly (an opt-in provider may still be
+# named for one job; see Brain._attempts).
+OPT_IN_PROVIDERS: tuple[Provider, ...] = (LLMSRELAY,)
 
 STT_PROVIDERS: tuple[Provider, ...] = (GROQ, MISTRAL, OPENAI)
 

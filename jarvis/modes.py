@@ -234,14 +234,14 @@ def parse_targets(raw: str) -> tuple[tuple[str, str], ...]:
     return tuple(picked)
 
 
-# The coding agent's own model, tried before whatever the current mode uses.
-# Chosen by the user for /agent, /fix, /testgen and /trace fix. Blueminds is a
-# relay, and on 2026-09-24 it answered this model with "has not been priced by
-# the administrator yet" — a 400 in a tenth of a second — so the agent falls
-# straight through to the mode's models until Blueminds switches it on, and
-# picks it up without an update the day they do.
+# The coding agent's own model, tried before whatever the current mode uses,
+# for /agent, /fix, /testgen and /trace fix. Claude Opus 4.6 through
+# LLMsRelay, the user's choice in 10.0.2. It replaced GLM-5 Turbo on
+# Blueminds, which Blueminds never switched on ("has not been priced by the
+# administrator yet"). Without an LLMsRelay key, or if it fails, the mode's
+# models do the work.
 AGENT_ENV = "JARVIS_AGENT_MODEL"
-AGENT_DEFAULT = "blueminds:openrouter/z-ai/glm-5-turbo"
+AGENT_DEFAULT = "llmsrelay:claude-opus-4.6"
 # A coding step writes whole files, and a relay adds its own latency.
 AGENT_TIMEOUT = 150.0
 

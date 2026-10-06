@@ -20,7 +20,7 @@ from openai import (
     RateLimitError,
 )
 
-from . import modes, providers, redact, security
+from . import modes, providers, redact, safety, security
 from .personality import JARVIS_IDENTITY, JARVIS_SYSTEM_PROMPT
 from .providers import Provider
 
@@ -305,6 +305,13 @@ class Brain:
         targets: tuple[tuple[str, str], ...] = (),
         target_timeout: float | None = None,
     ) -> tuple[str | None, str | None]:
+        # 10.0.2: every model, whichever provider, gets the content rules, and
+        # what it streams back has swearing masked before it reaches the screen.
+        messages = safety.with_rule(messages)
+        stream = None
+        if on_chunk is not None:
+            stream = on_chunk = safety.CleanStream(on_chunk)
+
         # Keys, passwords, emails and phone numbers leave as placeholders and
         # come back filled in. The caller's `messages` — the saved history —
         # is never modified; only the copy that is sent is masked.
@@ -445,7 +452,9 @@ class Brain:
                     reply = self._strip_pleasantry(reply)
                 if redactor is not None:
                     reply = redactor.restore(reply)
-                return reply, None
+                if stream is not None:
+                    stream.flush()
+                return safety.safe_reply(reply), None
             problems.append(f"{provider.label}: empty response")
 
         detail = "\n".join(f"  - {p}" for p in problems)

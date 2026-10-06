@@ -173,9 +173,9 @@ def test_follow_up_questions_still_see_the_document(base):
 
 # --- the agent's own model -----------------------------------------------------------
 
-def test_the_agent_defaults_to_glm_on_blueminds(monkeypatch):
+def test_the_agent_defaults_to_claude_opus_on_llmsrelay(monkeypatch):
     monkeypatch.delenv(modes.AGENT_ENV, raising=False)
-    assert modes.agent_targets() == (("blueminds", "openrouter/z-ai/glm-5-turbo"),)
+    assert modes.agent_targets() == (("llmsrelay", "claude-opus-4.6"),)
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -189,14 +189,29 @@ def test_the_agent_model_can_be_changed(monkeypatch, value, expected):
 def test_the_agent_model_is_tried_first(monkeypatch):
     from jarvis.brain import Brain
 
-    monkeypatch.setenv("BLUEMINDS_API_KEY", "test")
+    monkeypatch.delenv(modes.AGENT_ENV, raising=False)
+    monkeypatch.delenv("JARVIS_EXTRA_PROVIDERS", raising=False)
+    monkeypatch.setenv("LLMSRELAY_API_KEY", "test")
     monkeypatch.setenv("GROQ_API_KEY", "test")
     brain = Brain()
     attempts = brain._attempts(brain._chain(), extra=modes.agent_targets(), extra_timeout=150)
-    assert (attempts[0][0].name, attempts[0][1]) == ("blueminds", "openrouter/z-ai/glm-5-turbo")
+    assert (attempts[0][0].name, attempts[0][1]) == ("llmsrelay", "claude-opus-4.6")
     assert attempts[0][2] == 150
-    chain = [p.name for p in brain._chain()]
-    assert chain.index("blueminds") > chain.index("groq")         # paid, so after the free ones
+    # Opus is billed per token: ordinary chat never reaches it.
+    assert "llmsrelay" not in [p.name for p in brain._chain()]
+    plain = brain._attempts(brain._chain())
+    assert all(provider.name != "llmsrelay" for provider, *_rest in plain)
+
+
+def test_without_its_key_the_agent_uses_the_modes_models(monkeypatch):
+    from jarvis.brain import Brain
+
+    monkeypatch.delenv(modes.AGENT_ENV, raising=False)
+    monkeypatch.setenv("LLMSRELAY_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    brain = Brain()
+    attempts = brain._attempts(brain._chain(), extra=modes.agent_targets(), extra_timeout=150)
+    assert attempts and all(provider.name != "llmsrelay" for provider, *_rest in attempts)
 
 
 def test_a_refused_agent_model_falls_back_and_says_why(monkeypatch):
@@ -208,6 +223,8 @@ def test_a_refused_agent_model_falls_back_and_says_why(monkeypatch):
     from jarvis import agent as agent_mod, providers
     from jarvis.brain import Brain
 
+    # The agent's model before 10.0.2, kept here for the mechanism.
+    monkeypatch.setenv(modes.AGENT_ENV, "blueminds:openrouter/z-ai/glm-5-turbo")
     monkeypatch.setenv("BLUEMINDS_API_KEY", "test")
     monkeypatch.setenv("GROQ_API_KEY", "test")
     monkeypatch.setattr(providers, "chat_chain", lambda: [providers.GROQ])

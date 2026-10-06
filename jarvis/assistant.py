@@ -10,7 +10,7 @@ from . import (
     agent, history, i18n, index, modes, personality, providers, scanner,
     schedule, security, tools, usage, vcs, websearch,
 )
-from . import library, shield, vault
+from . import library, safety, shield, vault
 from . import trace as trace_mod
 from .addons import AddonManager
 from .brain import Brain
@@ -162,6 +162,12 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
         text = (user_input or "").strip()
         if not text:
             return JarvisResponse(text="I didn't catch that. Could you repeat?")
+        # 10.0.2: a request for sexual content stops here, before any model
+        # or command sees it. What was asked is not kept, only that it was.
+        refused = safety.refusal_for(text)
+        if refused:
+            security.audit.record("content safety", "request refused")
+            return JarvisResponse(text=refused)
 
         if text.startswith("/"):
             name, _, args = text[1:].strip().partition(" ")
@@ -554,8 +560,9 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
                 material, warning = shield.wrap(material, query)
             else:
                 results = websearch.search(query)
-                security.audit.record("web search", query[:120], f"{len(results)} results")
-                sources = "Sources:\n" + "\n".join(
+                via = results[0].engine if results else ""
+                security.audit.record("web search", query[:120], f"{len(results)} results, {via or 'web'}")
+                sources = (f"Sources ({via}):\n" if via else "Sources:\n") + "\n".join(
                     f"  {r.title}\n    {r.url}" for r in results
                 )
                 material = "\n\n".join(
@@ -785,17 +792,17 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
         import time
 
         started = time.time()
+        # /compare, the multi-AI tools and /debate reach models directly, so
+        # the content rules are applied here as well as in the Brain.
+        messages = safety.with_rule([{"role": "user", "content": prompt}])
         try:
             if provider.transport == "http":
-                text = providers.pollinations_chat(model, [
-                    {"role": "user", "content": prompt}
-                ])
-                return True, time.time() - started, text
+                text = providers.pollinations_chat(model, messages)
+                return True, time.time() - started, safety.safe_reply(text)
 
             client = providers.get_client(provider).with_options(
                 timeout=timeout, max_retries=0
             )
-            messages = [{"role": "user", "content": prompt}]
             last: Exception | None = None
             # Providers disagree about which of these they accept, and Gemini
             # honours them differently, so try both rather than guess.
@@ -810,7 +817,7 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
                 choice = reply.choices[0]
                 text = (choice.message.content or "").strip()
                 if text:
-                    return True, time.time() - started, text
+                    return True, time.time() - started, safety.safe_reply(text)
                 if getattr(choice, "finish_reason", "") != "length":
                     return True, time.time() - started, ""
             if last is not None:

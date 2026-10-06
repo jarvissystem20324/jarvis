@@ -385,7 +385,42 @@ def _count_devices(output: bool) -> int:
     return sum(1 for d in sd.query_devices() if d.get(key, 0) > 0)
 
 
+def _restart_if_in_old_files() -> bool:
+    """Start afresh when an old JARVIS's updater launched this one (10.0.2).
+
+    Before 9.9.1 the updater started the new version with the old one's
+    environment, so the new EXE ran on the old version's unpacked files in
+    Temp: the wrong libraries, deleted the moment the old copy closed. Since
+    9.9.2 JARVIS unpacks into %LOCALAPPDATA%\\JARVIS\\runtime, so a bundle in
+    Temp means exactly that. Start again, clean, once.
+    """
+    import os
+
+    if os.environ.pop("JARVIS_FRESH_START", ""):
+        return False
+    bundle = getattr(sys, "_MEIPASS", "")
+    if not bundle or sys.platform != "win32":
+        return False
+    import tempfile
+    from pathlib import Path
+
+    if not Path(bundle).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+        return False
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    env["JARVIS_FRESH_START"] = "1"
+    try:
+        subprocess.Popen([sys.executable, *sys.argv[1:]], close_fds=True, env=env)
+    except OSError:
+        return False
+    return True
+
+
 def main() -> int:
+    if _restart_if_in_old_files():
+        return 0
     if "--selftest" in sys.argv:
         return selftest()
     if "--mcp" in sys.argv:

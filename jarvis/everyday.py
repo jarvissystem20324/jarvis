@@ -581,7 +581,8 @@ class Everyday:
 
         Automatic, so it does not ask: turning it on was the choice, it is
         off in Privacy mode, and every search is in the audit log and shown
-        under the answer. Only the question is sent, to DuckDuckGo.
+        under the answer. Only the question is sent: to Firecrawl when it
+        has a key, otherwise to DuckDuckGo.
         """
         try:
             results = websearch.search(text)
@@ -598,7 +599,8 @@ class Everyday:
             f"the site you used, and say if they do not answer it.\n{wrapped}"
         )
         sources = "\n".join(f"  {r.title} — {r.url}" for r in results[:4])
-        return context, f"\n\n🌐 Searched the web:\n{sources}"
+        via = f" ({results[0].engine})" if results[0].engine else ""
+        return context, f"\n\n🌐 Searched the web{via}:\n{sources}"
 
     # --- git -----------------------------------------------------------------
 
@@ -674,7 +676,7 @@ class Everyday:
             self._write_setting("JARVIS_AUTO_WEB", wanted)
             return f"Automatic web search {wanted}."
         return (f"Automatic web search is {'on' if self.autoweb_enabled() else 'off'}. "
-                "Questions about recent things search DuckDuckGo first and cite it; "
+                f"Questions about recent things search the web ({websearch.engine()}) first and cite it; "
                 "never in Privacy mode or code mode. /autoweb on|off")
 
     @staticmethod

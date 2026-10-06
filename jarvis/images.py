@@ -30,7 +30,7 @@ from pathlib import Path
 
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
-from . import net, providers
+from . import net, providers, safety
 from .config import get_image_model, get_image_provider, get_output_dir
 
 # Labels shown in the UI -> pixel sizes.
@@ -80,6 +80,12 @@ class ImageGenerator:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ImageGenerationError("Please enter an image prompt.")
+        # 10.0.2: every image passes here, whoever wrote the prompt (you, or
+        # a model improving it) and whichever backend draws it.
+        refused = safety.image_refusal_for(prompt)
+        if refused:
+            raise ImageGenerationError(refused)
+        prompt = safety.modest(prompt)
         if len(prompt) > MAX_PROMPT_CHARS:
             prompt = prompt[:MAX_PROMPT_CHARS]
 
@@ -212,6 +218,8 @@ class ImageGenerator:
                 "height": height,
                 "model": "flux",
                 "nologo": "true",
+                # Pollinations' own filter, on top of the prompt check.
+                "safe": "true",
                 "referrer": providers.REFERRER,
                 "seed": int(seed),
             }

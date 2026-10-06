@@ -67,14 +67,17 @@ see when it recovers; then promote it with:
 JARVIS_EXTRA_PROVIDERS=blueminds
 ```
 
-The coding agent is the exception: it asks Blueminds for **GLM-5 Turbo**
-(`openrouter/z-ai/glm-5-turbo`) first on every `/agent`, `/fix` and
-`/testgen`. On 24 September 2026 Blueminds refused that model in a tenth of a
-second — *"has not been priced by the administrator yet"* — so the agent says
-so in its plan and falls through to the mode's models; the day Blueminds
-switches it on, the agent starts using it with no update. Change or remove it
-in Settings, or with `JARVIS_AGENT_MODEL=provider:model` (`mode` means none of
-its own). Your project's code goes to whichever model does the work.
+LLMsRelay is another: a paid relay for Anthropic's Claude, set with
+`LLMSRELAY_API_KEY`. It is opt-in because Claude Opus is billed per token,
+and ordinary chat doesn't need it.
+
+The coding agent uses it. Since 10.0.2 `/agent`, `/fix` and `/testgen` ask
+LLMsRelay for **Claude Opus 4.6** (`claude-opus-4.6`) first. Without the key,
+or if Opus refuses or stays silent, the agent says so in its plan and the
+mode's models do the work. Change or remove it in Settings, or with
+`JARVIS_AGENT_MODEL=provider:model` (`mode` means none of its own). Your
+project's code goes to whichever model does the work, and through LLMsRelay's
+servers as well as Anthropic's when it is Opus.
 
 OpenAI still works and is still the best quality, but it is now strictly
 optional. `JARVIS_IMAGE_PROVIDER=auto` deliberately means *free*: having an
@@ -358,8 +361,14 @@ results are marked as untrusted. Lines written to the AI rather than to you
 are removed, and you are told when a source tried it.
 
 **Automatic web search.** A question about something recent ("who won the
-latest…", "…today?") searches DuckDuckGo first and lists the sources under
+latest…", "…today?") searches the web first and lists the sources under
 the answer. Only the question is sent. Off in Privacy mode and code mode.
+
+**Firecrawl.** With `FIRECRAWL_API_KEY` set (Settings → Firecrawl), every
+search goes to Firecrawl first, and a page too bare to read directly (drawn by
+JavaScript, or blocking scripts) is read through it. DuckDuckGo, which needs no
+key, takes over when there is no key or Firecrawl fails. Page watches never use
+Firecrawl, so a timer can't spend your credits.
 
 **Natural voices.** Speech uses Microsoft's neural voices (Ryan, British,
 by default; Turkish text gets a Turkish voice). The text being spoken goes
@@ -460,6 +469,16 @@ cause and re-runs to confirm.
 `/undo` reverts everything a run wrote.
 
 ## Security
+
+**Clean language, always (10.0.2).** JARVIS never swears and never writes,
+talks about or draws anything sexual or suggestive, whichever AI answers. It
+has no switch. A request that plainly asks for that is refused before any model
+sees it. Every request to every model, including `/compare` and `/debate`,
+carries the rule, placed after any `/persona` so a role-play can't undo it.
+Swear words are masked in every reply, English and Turkish, as it streams.
+Image prompts get a stricter check, pictures of people are steered to modest
+clothing, and Pollinations' own safe mode is on. Plain answers about health and
+biology still work ("sex chromosomes" is homework, not a request).
 
 Five things, and one of them is deliberately less than its name suggests.
 
@@ -650,7 +669,8 @@ written only to the local machine, so `JARVIS-Setup.exe` is safe to share.
 The app updates itself in place. Users keep their `.env`, their settings, their
 addons, and their generated images — nothing is reinstalled.
 
-**How it works.** JARVIS reads a JSON manifest at `JARVIS_UPDATE_URL`, compares
+**How it works.** JARVIS reads a JSON manifest at `JARVIS_UPDATE_URL` (blank
+means the GitHub release's `update.json`; `off` turns checks off), compares
 versions, and if a newer one exists offers it in a dialog with release notes.
 On accept it downloads the new EXE, verifies its SHA-256, renames the running
 EXE aside, moves the new one into place, and relaunches. The leftover is
@@ -674,6 +694,20 @@ JARVIS.exe --selftest
 Writes `jarvis-selftest.txt` next to the EXE listing which subsystems loaded
 (audio devices, providers, addons, models). Any line starting `[FAIL]` is the
 problem. Useful because the app is a windowed build with no console.
+
+**A copy that never offers updates.** Up to 10.0.1, `JARVIS-Setup.exe` wrote a
+blank `JARVIS_UPDATE_URL`, and a blank address meant no update checks, so
+copies installed that way never saw an update. 10.0.2 treats blank as the
+GitHub address. For an older copy, set this line in `%LOCALAPPDATA%\JARVIS\.env`
+and restart it:
+
+```
+JARVIS_UPDATE_URL=https://github.com/jarvissystem20324/jarvis/releases/latest/download/update.json
+```
+
+Copies older than 9.9.1 restart into the new version the wrong way, on the old
+version's files. 10.0.2 notices this and restarts itself cleanly; if a window
+still doesn't appear, open JARVIS again — the update is already in place.
 
 ## Layout
 

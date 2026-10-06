@@ -162,7 +162,7 @@ def _number(raw: str) -> float:
 def page_text(url: str) -> str:
     from . import websearch
 
-    _title, text = websearch.fetch(url)
+    _title, text = websearch.fetch(url, deep=False)
     return re.sub(r"\s+", " ", text).strip()
 
 
