@@ -97,6 +97,11 @@ class Tool:
         if spaced:
             while parts and not parts[-1]:
                 parts.pop()
+            # Keep one separator when fields were left blank: without it the
+            # command splits "C:\My Files\a.pdf" (or "Ali paid 600 for Ali,
+            # Ayşe") at its first space.
+            if 0 < len(parts) < len(self.fields):
+                parts.append("")
             return f"/{self.name} {' | '.join(parts)}".rstrip()
         return f"/{self.name} {' '.join(p for p in parts if p)}".rstrip()
 
@@ -140,6 +145,19 @@ def split(args: str, count: int) -> list[str]:
         parts = text.split(None, count - 1)
     parts = [p.strip() for p in parts]
     return parts + [""] * (count - len(parts))
+
+
+def split_free(args: str, count: int) -> list[str]:
+    """Like split(), for commands whose first value is free text or a path.
+
+    Without a "|" the whole text is the first value. split() would break it at
+    spaces: "/debate pineapple belongs on pizza" debated "pineapple", and a
+    file in "My Documents" was looked for in "My".
+    """
+    text = (args or "").strip()
+    if "|" in text:
+        return split(text, count)
+    return [text] + [""] * (count - 1)
 
 
 def help_text() -> str:

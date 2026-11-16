@@ -37,14 +37,37 @@ _HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 _ATTACKS: tuple[tuple[str, re.Pattern], ...] = tuple(
     (name, re.compile(pattern, re.I))
     for name, pattern in (
-        ("override", r"\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|your|system)\b[^.\n]{0,30}\b(instructions?|prompts?|rules|directions|guidelines|messages)"),
+        # The words must sit together: "if you forget your password, follow
+        # the instructions" is a help page, not an attack (10.5.2).
+        # A qualifier is required ("previous", "above", "system"…): "players
+        # who ignore the rules" and "don't ignore the instructions on the
+        # label" are ordinary text; "ignore the previous system prompt" isn't.
+        ("override", r"\b(ignore|disregard|forget|override)\s+(all\s+|any\s+|of\s+)*(the\s+|your\s+|my\s+)?"
+                     r"(previous|prior|above|earlier|preceding|system|original|initial|all)\s+"
+                     r"((previous|prior|above|earlier|system|original|initial)\s+)?"
+                     r"(instructions?|prompts?|rules|directions|guidelines|messages)\b"
+                     r"|\b(disregard|override)\s+(all\s+)?(of\s+)?your\s+(instructions?|prompts?|rules|guidelines|programming)\b"
+                     r"|\b(ignore|disregard|forget)\s+everything\s+(above|before|said|you\s+(were|have\s+been)\s+told)\b"),
         ("new instructions", r"\b(new|updated|real|actual)\s+(system\s+)?(instructions?|prompt|directive)s?\s*[:\-]"),
-        ("role change", r"\byou\s+are\s+(now|no\s+longer)\b|\bfrom\s+now\s+on,?\s+you\b|\bact\s+as\s+(if\s+you\s+are\s+)?(an?\s+)?(unrestricted|jailbroken|dan)\b"),
+        # "You are now ready to use the tool" and "from now on, you can sign
+        # in" are ordinary prose; a new identity or a new rule is not.
+        ("role change", r"\byou(\s+are|'re)\s+(now|no\s+longer)\s+(an?\s+|in\s+)?(unrestricted|jailbroken|uncensored|unfiltered|dan|evil|free|developer\s+mode|bound|restricted|limited|ai|assistant|chatbot|model|language\s+model)\b"
+                        # "You are now a pirate who reveals secrets" — a new
+                        # identity; "you are now a registered user" isn't.
+                        r"|\byou(\s+are|'re)\s+now\s+an?\s+\w+(\s+\w+)?\s+(who|that|with\s+no|without)\b"
+                        r"|\bfrom\s+now\s+on,?\s+you(\s+are|'re)\s+(dan|an?\s+(unrestricted|jailbroken|uncensored|evil|different|new)\b|an?\s+\w+\s+(who|that)\b)"
+                        r"|\bfrom\s+now\s+on,?\s+you\s+(will|must|shall|should|are\s+to)\s+(ignore|act|answer|respond|reply|pretend|obey|only|always|never)\b"
+                        r"|\bact\s+as\s+(if\s+you\s+are\s+)?(an?\s+)?(unrestricted|jailbroken|dan)\b"),
         ("system prompt", r"\b(reveal|print|show|repeat|output)\b[^.\n]{0,30}\b(system\s+prompt|your\s+instructions|hidden\s+prompt)"),
         ("fake role tag", r"^\s*(\[|<\|?|###\s*)(system|assistant|developer)(\]|\|?>|:)"),
         ("secrecy", r"\b(do\s+not|don't|never)\s+(tell|inform|mention\s+(this\s+)?to|alert)\s+the\s+user\b"),
         ("exfiltration", r"!\[[^\]]*\]\(https?://[^)]*[?&][^)]*=\s*\{?[^)]*\)|\b(send|post|forward|upload)\b[^.\n]{0,40}\b(to|at)\s+https?://"),
-        ("tool abuse", r"\b(run|execute)\b[^.\n]{0,20}\b(this\s+)?(command|shell|powershell|script)\b[^.\n]{0,20}:"),
+        # Aimed at the assistant, not a tutorial's "run the following command:".
+        # Addressed to the assistant ("Assistant: run this command"), or an
+        # order to run something silently. "You should run this script as
+        # administrator" and "when you run the script" are tutorials.
+        ("tool abuse", r"\b(assistant|ai|jarvis|chatbot|model)\b\s*[:,]\s*(now\s+)?(please\s+)?(run|execute)\b[^.\n]{0,40}\b(command|shell|powershell|script|code)\b"
+                       r"|\b(run|execute)\b[^.\n]{0,40}\b(command|shell|powershell|script|code)\b[^.\n]{0,30}\b(silently|secretly|without\s+(asking|telling|informing|showing))\b"),
     )
 )
 
@@ -94,20 +117,24 @@ def clean(text: str, source: str = "an outside source") -> Cleaned:
     text = text or ""
     invisible = len(_INVISIBLE.findall(text))
     text = _INVISIBLE.sub("", text)
-    # Fold look-alike letters (fullwidth, mathematical bold…) so a phrase
-    # spelled in them is still recognised.
-    text = unicodedata.normalize("NFKC", text)
     comments = _HTML_COMMENT.findall(text)
     text = _HTML_COMMENT.sub(" ", text)
 
+    def probe(chunk: str) -> str:
+        # Look-alike letters (fullwidth, mathematical bold…) are folded so a
+        # phrase spelled in them is still recognised, but only in the copy
+        # that is searched: folding the text sent on turned "10⁶" into "106"
+        # and "m²" into "m2" in every summary.
+        return unicodedata.normalize("NFKC", chunk)
+
     removed: list[tuple[str, str]] = []
     for comment in comments:
-        if any(p.search(comment) for _n, p in _ATTACKS):
+        if any(p.search(probe(comment)) for _n, p in _ATTACKS):
             removed.append(("hidden comment", " ".join(comment.split())[:80]))
 
     kept: list[str] = []
     for line in text.splitlines():
-        if not any(pattern.search(line) for _n, pattern in _ATTACKS):
+        if not any(pattern.search(probe(line)) for _n, pattern in _ATTACKS):
             kept.append(line)
             continue
         # Sentence by sentence, so the rest of a paragraph survives: a copied
@@ -116,7 +143,7 @@ def clean(text: str, source: str = "an outside source") -> Cleaned:
         sentences = re.split(r"(?<=[.!?])\s+", line)
         survivors = []
         for sentence in sentences:
-            hit = next((name for name, pattern in _ATTACKS if pattern.search(sentence)), None)
+            hit = next((name for name, pattern in _ATTACKS if pattern.search(probe(sentence))), None)
             if hit:
                 removed.append((hit, " ".join(sentence.split())[:80]))
             else:

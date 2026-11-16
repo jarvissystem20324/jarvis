@@ -88,8 +88,12 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         orb_module.PAUSED = lambda: not self.window_settled()
 
         self.title(f"JARVIS {__version__}")
-        self.geometry("1100x720")
-        self.minsize(900, 600)
+        # Never taller or wider than the screen less the taskbar: on a
+        # 1366×768 laptop, 720 high put the message box under the taskbar.
+        width = min(1100, self.winfo_screenwidth() - 40)
+        height = min(720, self.winfo_screenheight() - 110)
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(900, width), min(600, height))
         self.configure(fg_color=COLORS["bg"])
 
         self.jarvis = Jarvis()
@@ -103,6 +107,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self._last_reply = ""
         self._find_needle = ""
         self._streaming = False
+        self._held_messages: list[tuple] = []
         self._recording = False
         self._gallery_images: list = []
 
@@ -485,7 +490,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
 
         if name == history.current_name():
             return
-        self.jarvis.chats(name)
+        self.jarvis.switch_chat(name)
         self._render_conversation()
 
     def _new_chat(self) -> None:
@@ -1414,6 +1419,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
 
     def prefill_chat(self, text: str) -> None:
         self._show_tab("chat")
+        if self._busy:
+            # The box is disabled while a reply runs: insert() did nothing and
+            # the placeholder was left behind as real text. Kept for later.
+            self._pending_prefill = text
+            return
         self.chat_input.delete(0, "end")
         self.chat_input.insert(0, text)
         self.chat_input.icursor("end")
@@ -1535,6 +1545,12 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
     ) -> None:
         """Put a message on screen. `record=False` for the window's own
         notices, so /copy still means JARVIS's last real answer."""
+        if self._streaming:
+            # A reminder, a price alert or a scheduled task while an answer is
+            # still arriving. Written now, it sat inside the streamed part and
+            # was wiped when the answer was finalised; it is shown just after.
+            self._held_messages.append((sender, text, is_user, record))
+            return
         if not is_user and record:
             self._last_reply = text
         self.chat_log.configure(state="normal")
@@ -1876,6 +1892,18 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         answer = {"allowed": False}
         done = threading.Event()
 
+        if threading.current_thread() is threading.main_thread():
+            # Asked from the window's own thread (▶ Run on the Coding page,
+            # saving an automation): queueing the dialog and then waiting would
+            # block the very thread that has to show it, freezing JARVIS for
+            # two minutes before "Not run.". wait_window keeps events flowing.
+            try:
+                dialog = PermissionDialog(self, request)
+                dialog.wait_window()
+                return bool(dialog.allowed)
+            except Exception:
+                return False
+
         def show():
             try:
                 dialog = PermissionDialog(self, request)
@@ -1940,14 +1968,49 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         except tkinter.TclError:
             pass
 
-        table = [(seq, handler) for _aid, seq, _text, handler in self.shortcut_bindings()]
-        table.append(("<Control-plus>", lambda e: self._zoom(1)))
-        for sequence, handler in table:
+        table = [(aid, seq, handler) for aid, seq, _text, handler in self.shortcut_bindings()]
+        table.append(("bigger2", "<Control-plus>", lambda e: self._zoom(1)))
+        by_seq = {seq: (aid, handler) for aid, seq, handler in table}
+
+        def letter(seq: str):
+            m = re.fullmatch(r"<((?:\w+-)*)([A-Za-z])>", seq)
+            return (m.group(1), m.group(2)) if m else None
+
+        def run(event, seq: str):
+            # Tk tells a letter's case by its keysym, so with Caps Lock on a
+            # plain Ctrl+K arrived as "K" and cleared the conversation. Both
+            # cases come here, and the Shift key itself decides.
+            parts = letter(seq)
+            if parts:
+                mods, key = parts
+                seq = f"<{mods}{key.upper() if event.state & 0x1 else key.lower()}>"
+            found = by_seq.get(seq)
+            if found is None:
+                return None              # not ours: Ctrl+C still copies in a box
+            aid, handler = found
+            if aid == "stop":
+                # Escape closes the palette, a tool window or a prompt; only in
+                # the main window does it also abandon the answer in flight.
+                try:
+                    if event.widget.winfo_toplevel() is not self:
+                        return None
+                except (AttributeError, tkinter.TclError):
+                    return None
+            # "break" stops Tk also inserting the character into the entry.
+            # Locked means locked: Ctrl+Shift+C would otherwise copy the
+            # last answer out from behind the PIN screen.
+            if not self._locked:
+                handler(event)
+            return "break"
+
+        sequences = set(by_seq)
+        for seq in list(sequences):
+            parts = letter(seq)
+            if parts:
+                sequences |= {f"<{parts[0]}{parts[1].lower()}>", f"<{parts[0]}{parts[1].upper()}>"}
+        for sequence in sequences:
             try:
-                # "break" stops Tk also inserting the character into the entry.
-                # Locked means locked: Ctrl+Shift+C would otherwise copy the
-                # last answer out from behind the PIN screen.
-                self.bind_all(sequence, lambda e, h=handler: (None if self._locked else h(e), "break")[1])
+                self.bind_all(sequence, lambda e, s=sequence: run(e, s))
                 self._bound_shortcuts.append(sequence)
             except tkinter.TclError:
                 pass
@@ -2170,6 +2233,10 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             self.stop_btn.grid() if busy else self.stop_btn.grid_remove()
         except Exception:
             pass
+        pending = getattr(self, "_pending_prefill", None)
+        if not busy and pending:
+            self._pending_prefill = None
+            self.prefill_chat(pending)
 
     def _run_worker(self, work, status: str) -> None:
         """Run `work()` off-thread, marshalling results back to the Tk loop."""
@@ -2214,6 +2281,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             "or try a faster mode.",
             is_user=False,
         )
+        self._show_held()
 
     # --- streaming --------------------------------------------------------
 
@@ -2279,6 +2347,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
         self._last_reply = text
+        self._show_held()
+
+    def _show_held(self) -> None:
+        """Messages that arrived while an answer was streaming, now it has ended."""
+        held, self._held_messages = self._held_messages, []
+        for sender, text, is_user, record in held:
+            self._append_message(sender, text, is_user, record)
 
     def _send_chat(self) -> None:
         if self._busy or self._locked:
@@ -2413,6 +2488,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self._reset_stream()
         self._streaming = False
         self._append_message("JARVIS", message, is_user=False)
+        self._show_held()
 
     def _listen(self) -> None:
         if self._busy:

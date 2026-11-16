@@ -261,9 +261,11 @@ class HomePage(Hub):
     def customize(self) -> None:
         menu = tkinter.Menu(self, tearoff=0)
         shown = set(prefs.get("home_widgets", list(WIDGETS)))
+        # Kept on the page: a variable made inline is garbage-collected at
+        # once, so every tick showed empty and ticking "Clock" hid it.
+        self._menu_vars = {key: tkinter.BooleanVar(value=key in shown) for key in WIDGETS}
         for key, name in WIDGETS.items():
-            menu.add_checkbutton(label=name, onvalue=True, offvalue=False,
-                                 variable=tkinter.BooleanVar(value=key in shown),
+            menu.add_checkbutton(label=name, onvalue=True, offvalue=False, variable=self._menu_vars[key],
                                  command=lambda k=key: self._toggle(k))
         menu.add_separator()
         menu.add_command(label="Start JARVIS on Home", command=self._start_here)

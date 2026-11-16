@@ -197,8 +197,16 @@ def check(text: str, tag: str | None = None) -> list[dict]:
         if checker is None:
             raise SpellError("No spell checker for this language is installed in Windows.")
     other = _checker("en-US" if tag.startswith("tr") else "tr-TR")
+    # Windows counts in UTF-16 units, where an emoji takes two: map them to
+    # Python's indices, or every word after an emoji is cut in the wrong place.
+    units: list[int] = []
+    for index, ch in enumerate(text):
+        units += [index, index] if ord(ch) > 0xFFFF else [index]
+    units.append(len(text))
     out = []
-    for start, length, action, replacement in _raw(checker, text):
+    for start_u, length_u, action, replacement in _raw(checker, text):
+        start = units[min(start_u, len(units) - 1)]
+        length = units[min(start_u + length_u, len(units) - 1)] - start
         word = text[start:start + length]
         if other is not None and action != 3 and not _raw(other, word):
             continue

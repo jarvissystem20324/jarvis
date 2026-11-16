@@ -331,7 +331,11 @@ def _download(url: str) -> tuple[str, str]:
     except Exception as exc:
         raise SearchError(f"Could not fetch {url}: {exc}")
 
-    body = raw.decode(charset, errors="replace")
+    try:
+        body = raw.decode(charset, errors="replace")
+    except LookupError:
+        # "utf8mb4", "none", or a codec that isn't text ("hex"): made up by the server.
+        body = raw.decode("utf-8", errors="replace")
     title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", body)
     title = _clean(title_match.group(1)) if title_match else url
 

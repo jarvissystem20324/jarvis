@@ -37,23 +37,30 @@ class MathError(Exception):
     pass
 
 
-def _sympify(text: str):
-    """Parse maths with SymPy, after refusing anything that isn't maths.
+def safe_maths(text: str) -> str:
+    """The text, if it is only maths; MathError if not.
 
-    parse_expr evaluates Python, so the input is first limited to digits,
+    SymPy's parse_expr evaluates Python, so the input is limited to digits,
     operators, single-letter variables and a whitelist of function names:
     no quotes, no underscores, no attribute access — nothing that can reach
-    Python itself.
+    Python itself. Everything that parses user maths goes through here
+    (/plot didn't until 10.5.2, and ran whatever it was given).
     """
-    from sympy.parsing.sympy_parser import (convert_xor, implicit_multiplication_application, parse_expr,
-                                            standard_transformations)
-
     cleaned = text.replace("²", "**2").replace("³", "**3").replace("√", "sqrt").replace("π", "pi").replace("ln(", "log(")
     if "_" in cleaned or not _ALGEBRA_CHARS.match(cleaned):
         raise MathError("That doesn't look like maths I can read.")
     for word in re.findall(r"[A-Za-z]{2,}", cleaned):
         if word.lower() not in _ALLOWED_WORDS:
             raise MathError(f"I don't know '{word}' in an equation.")
+    return cleaned
+
+
+def _sympify(text: str):
+    """Parse maths with SymPy, after refusing anything that isn't maths."""
+    from sympy.parsing.sympy_parser import (convert_xor, implicit_multiplication_application, parse_expr,
+                                            standard_transformations)
+
+    cleaned = safe_maths(text)
     transformations = standard_transformations + (implicit_multiplication_application, convert_xor)
     return parse_expr(cleaned, transformations=transformations, evaluate=True)
 

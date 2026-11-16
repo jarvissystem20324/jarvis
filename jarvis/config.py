@@ -135,7 +135,7 @@ def load_config() -> None:
         last_env_changes = []
 
     if env_path.exists():
-        load_dotenv(env_path)
+        load_dotenv(env_path, encoding="utf-8-sig")   # Notepad may add a BOM
     else:
         load_dotenv()  # fall back to CWD / process env
     _loaded = True

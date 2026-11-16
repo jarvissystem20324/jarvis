@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -157,18 +158,22 @@ class CodeMode(Addon):
     def _walk(self) -> list[Path]:
         if self.root is None:
             return []
+        import os
+
         skip = {".git", "venv", ".venv", "node_modules", "__pycache__", "dist",
                 "build", ".idea", ".vscode", "release"}
         out: list[Path] = []
-        for p in self.root.rglob("*"):
-            if len(out) >= MAX_LISTED:
-                break
-            if not p.is_file():
-                continue
-            if any(part in skip for part in p.parts):
-                continue
-            if p.suffix.lower() in TEXT_SUFFIXES:
-                out.append(p)
+        # os.walk, pruning skipped folders before entering them: rglob walked
+        # all of venv and node_modules first (25,000 paths, 8 s on the window's
+        # thread), and checking the absolute path made a project inside a
+        # folder called "build" look empty.
+        for folder, dirs, files in os.walk(self.root):
+            dirs[:] = sorted(d for d in dirs if d not in skip)
+            for name in sorted(files):
+                if Path(name).suffix.lower() in TEXT_SUFFIXES:
+                    out.append(Path(folder) / name)
+                    if len(out) >= MAX_LISTED:
+                        return out
         return out
 
     def list_files(self, ctx, args: str) -> str:
@@ -263,21 +268,33 @@ class CodeMode(Addon):
         out: list[tuple[str, str]] = []
         path: str | None = None
         body: list[str] = []
+        fence = 3          # backticks on the opening line: ```` lets a file hold ```
+        depth = 0          # code examples opened inside the file (a README's)
         for line in content.splitlines():
-            if line.lstrip().startswith("```"):
-                info = line.lstrip()[3:].strip().strip("`")
-                if path is None:
+            match = re.match(r"(`{3,})(.*)$", line.lstrip())
+            if path is None:
+                if match:
+                    info = match.group(2).strip().strip("`")
                     looks_like_path = "/" in info or "\\" in info or (
                         "." in info and not info.startswith(".")
                     )
                     if looks_like_path:
-                        path, body = info, []
+                        path, body, fence, depth = info, [], len(match.group(1)), 0
+                continue
+            # The first ``` inside a file used to end it, so a README was
+            # written up to its first example. A fence shorter than the one
+            # that opened the file is content; at the same length, ```python
+            # opens an example and a bare ``` closes it before closing the file.
+            if match and len(match.group(1)) >= fence:
+                if match.group(2).strip():
+                    depth += 1
+                elif depth:
+                    depth -= 1
+                else:
+                    out.append((path, "\n".join(body)))
+                    path, body = None, []
                     continue
-                out.append((path, "\n".join(body)))
-                path = None
-                body = []
-            elif path is not None:
-                body.append(line)
+            body.append(line)
         return out
 
     def _last_proposals(self, ctx) -> list[tuple[str, str]]:
@@ -496,6 +513,12 @@ class CodeMode(Addon):
             ):
                 if candidate.is_file():
                     return str(candidate)
+        if getattr(sys, "frozen", False):
+            # In the EXE, sys.executable is JARVIS.exe: "-m unittest" opened a
+            # second JARVIS window instead of running the tests.
+            from jarvis import devtools
+
+            return devtools.find_python() or "python"
         return sys.executable
 
     def run_tests(self, ctx, args: str) -> str:

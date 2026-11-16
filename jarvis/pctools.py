@@ -755,13 +755,20 @@ class PCTools:
             if not path:
                 return "No image yet. /wallpaper <description> paints one."
         elif text:
+            # Asked first: painting can cost an image request, and a sentence
+            # wrongly routed here once painted a wallpaper before anyone agreed.
+            if not security.permissions.ask(security.CHANGE_SETTING, f"paint “{text[:80]}” and set it as your "
+                                             "desktop wallpaper", context="/wallpaper"):
+                return "Denied. Nothing was painted or changed."
             try:
-                path = self.images.generate(f"{text}, desktop wallpaper, 16:9, highly detailed, no text", size="1792x1024")
+                path = self.images.generate(f"{text}, desktop wallpaper, 16:9, highly detailed, no text",
+                                            size="Landscape (1536x1024)")
             except Exception as exc:
                 return f"Couldn't paint it: {exc}"
         else:
             return "Usage: /wallpaper <description>   e.g. /wallpaper misty Istanbul skyline at dawn, cinematic"
-        if not security.permissions.ask(security.CHANGE_SETTING, f"set {Path(path).name} as your desktop wallpaper", context="/wallpaper"):
+        if text.lower() in {"last", "this", "current"} and not security.permissions.ask(
+                security.CHANGE_SETTING, f"set {Path(path).name} as your desktop wallpaper", context="/wallpaper"):
             return "Denied. The image is saved but not set."
         try:
             set_wallpaper(Path(path).resolve())

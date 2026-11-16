@@ -16,6 +16,7 @@ import html
 import json
 import math
 import re
+import threading
 import time
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
@@ -168,85 +169,138 @@ def page_text(url: str) -> str:
 
 # --- watches -----------------------------------------------------------------------------
 
+# Every read-change-save of the watch list holds this, so watches firing
+# together, and /watch add or remove, never undo each other's changes.
+_WATCH_LOCK = threading.Lock()
+
+
 def _next_id(items: list[dict]) -> int:
     return max((w["id"] for w in items), default=0) + 1
 
 
 def add_watch(watch: dict) -> dict:
-    items = WATCHES.load()
-    watch["id"] = _next_id(items)
-    watch["created"] = time.time()
-    items.append(watch)
-    WATCHES.save(items)
+    with _WATCH_LOCK:       # the same lock as check_watch, so neither undoes the other
+        items = WATCHES.load()
+        watch["id"] = _next_id(items)
+        watch["created"] = time.time()
+        items.append(watch)
+        WATCHES.save(items)
     reminders.board.add("watch", str(watch["id"]), time.time() + watch.get("every", 900))
     return watch
 
 
 def remove_watch(which: str) -> str:
-    items = WATCHES.load()
-    keep = [w for w in items if str(w["id"]) != which.strip()]
-    if len(keep) == len(items):
-        return f"No watch {which}. /watches lists them."
-    WATCHES.save(keep)
+    with _WATCH_LOCK:
+        items = WATCHES.load()
+        keep = [w for w in items if str(w["id"]) != which.strip()]
+        if len(keep) == len(items):
+            return f"No watch {which}. /watches lists them."
+        WATCHES.save(keep)
     for r in [r for r in reminders.board.items if r.kind == "watch" and r.text == which.strip()]:
         reminders.board.cancel(str(r.id))
     return f"Stopped watch {which}."
 
 
+# Country names (English and Turkish) to the codes the holiday API wants.
+COUNTRY_CODES = {
+    "turkey": "TR", "türkiye": "TR", "turkiye": "TR", "germany": "DE", "almanya": "DE", "austria": "AT",
+    "avusturya": "AT", "denmark": "DK", "danimarka": "DK", "mexico": "MX", "meksika": "MX", "united states": "US",
+    "usa": "US", "america": "US", "amerika": "US", "abd": "US", "united kingdom": "GB", "uk": "GB", "england": "GB",
+    "britain": "GB", "ingiltere": "GB", "i̇ngiltere": "GB", "france": "FR", "fransa": "FR", "spain": "ES",
+    "ispanya": "ES", "italy": "IT", "italya": "IT", "netherlands": "NL", "holland": "NL", "hollanda": "NL",
+    "belgium": "BE", "belçika": "BE", "switzerland": "CH", "isviçre": "CH", "sweden": "SE", "isveç": "SE",
+    "norway": "NO", "norveç": "NO", "finland": "FI", "finlandiya": "FI", "poland": "PL", "polonya": "PL",
+    "greece": "GR", "yunanistan": "GR", "portugal": "PT", "portekiz": "PT", "ireland": "IE", "irlanda": "IE",
+    "canada": "CA", "kanada": "CA", "australia": "AU", "avustralya": "AU", "japan": "JP", "japonya": "JP",
+    "china": "CN", "çin": "CN", "brazil": "BR", "brezilya": "BR", "russia": "RU", "rusya": "RU",
+    "ukraine": "UA", "ukrayna": "UA", "azerbaijan": "AZ", "azerbaycan": "AZ", "georgia": "GE", "gürcistan": "GE",
+    "bulgaria": "BG", "bulgaristan": "BG", "romania": "RO", "romanya": "RO", "hungary": "HU", "macaristan": "HU",
+    "czechia": "CZ", "czech republic": "CZ", "çekya": "CZ", "south korea": "KR", "korea": "KR", "güney kore": "KR",
+    "new zealand": "NZ", "south africa": "ZA", "argentina": "AR", "arjantin": "AR", "egypt": "EG", "mısır": "EG",
+    "morocco": "MA", "fas": "MA", "serbia": "RS", "sırbistan": "RS", "croatia": "HR", "hırvatistan": "HR",
+}
+
+
 def check_watch(watch_id: int) -> str:
-    """Run one watch. Returns a message when it has news, '' otherwise, and re-books it."""
-    items = WATCHES.load()
-    watch = next((w for w in items if w["id"] == watch_id), None)
+    """Run one watch. Returns a message when it has news, '' otherwise, and re-books it.
+
+    After a restart every overdue watch fires at once, each on its own
+    thread. They used to load the whole list, fetch, and save the whole
+    list back, so one watch's save undid another's (repeat alerts, lost
+    prices). Fetching is done outside the lock; the save re-reads the list
+    and changes only this watch, and the next check is booked whatever
+    happens.
+    """
+    with _WATCH_LOCK:
+        watch = next((dict(w) for w in WATCHES.load() if w["id"] == watch_id), None)
     if watch is None:
         return ""
     message, keep = "", True
     try:
-        kind = watch["type"]
-        if kind == "alert":
-            value, label = quote_value(watch["subject"])
-            hit = value > watch["value"] if watch["op"] == ">" else value < watch["value"]
-            if hit:
-                message = f"📈 {label} is {value:,.4g} — {'above' if watch['op'] == '>' else 'below'} your {watch['value']:,g}."
-                keep = False
-        elif kind == "price":
-            price = find_price(kit.get_text(watch["url"], limit=3_000_000))
-            if price is not None:
-                last = watch.get("last")
-                if watch.get("target") and price <= watch["target"]:
-                    message = f"🏷 {watch['name']} is now {price:,.2f} — at or below your {watch['target']:,g}.\n{watch['url']}"
-                    keep = False
-                elif last and price < last:
-                    message = f"🏷 Price drop: {watch['name']} {last:,.2f} → {price:,.2f} ({(price - last) / last * 100:.0f}%).\n{watch['url']}"
-                watch["last"] = price
-        elif kind == "page":
-            text = page_text(watch["url"])
-            digest = hashlib.sha256(text.encode()).hexdigest()
-            if watch.get("hash") and digest != watch["hash"]:
-                old = watch.get("text", "")
-                added = [l[1:].strip() for l in difflib.ndiff(re.split(r"(?<=[.!?])\s+", old), re.split(r"(?<=[.!?])\s+", text))
-                         if l.startswith("+ ") and len(l) > 12][:3]
-                message = f"🔔 {watch['url']} changed." + ("".join(f"\n  + {a[:140]}" for a in added) if added else "")
-            watch["hash"], watch["text"] = digest, text[:20000]
-        elif kind == "quake":
-            since = watch.get("since") or (time.time() - 3600)
-            found = kit.get_json("https://www.seismicportal.eu/fdsnws/event/1/query", {
-                "format": "json", "lat": watch["lat"], "lon": watch["lon"], "maxradius": watch.get("radius_deg", 3),
-                "minmag": watch["min"], "start": datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "limit": 5})
-            quakes = [_quake(f, watch["lat"], watch["lon"]) for f in found.get("features", [])]
-            if quakes:
-                message = "🌍 Earthquake:\n" + "\n".join(q["line"] for q in quakes[:3])
-                watch["since"] = max(q["epoch"] for q in quakes) + 1
-            else:
-                watch["since"] = time.time() - 120
+        message, keep = _run_watch(watch)
     except Exception:
         message = ""
-    watch["checked"] = time.time()
-    if keep:
-        WATCHES.save([watch if w["id"] == watch_id else w for w in items])
-        reminders.board.add("watch", str(watch_id), time.time() + watch.get("every", 900))
-    else:
-        WATCHES.save([w for w in items if w["id"] != watch_id])
+    finally:
+        watch["checked"] = time.time()
+        try:
+            with _WATCH_LOCK:
+                items = WATCHES.load()
+                if any(w["id"] == watch_id for w in items):
+                    if keep:
+                        WATCHES.save([watch if w["id"] == watch_id else w for w in items])
+                    else:
+                        WATCHES.save([w for w in items if w["id"] != watch_id])
+        except OSError:
+            pass          # the file was busy (WinError 5): this result is lost, the watch is not
+        finally:
+            # Booked whatever happened above: a failed save used to skip this,
+            # and that watch never ran again.
+            if keep:
+                reminders.board.add("watch", str(watch_id), time.time() + watch.get("every", 900))
     return message
+
+
+def _run_watch(watch: dict) -> tuple[str, bool]:
+    """(news or '', keep watching). Updates `watch` in place."""
+    message, keep = "", True
+    kind = watch["type"]
+    if kind == "alert":
+        value, label = quote_value(watch["subject"])
+        hit = value > watch["value"] if watch["op"] == ">" else value < watch["value"]
+        if hit:
+            message = f"📈 {label} is {value:,.4g} — {'above' if watch['op'] == '>' else 'below'} your {watch['value']:,g}."
+            keep = False
+    elif kind == "price":
+        price = find_price(kit.get_text(watch["url"], limit=3_000_000))
+        if price is not None:
+            last = watch.get("last")
+            if watch.get("target") and price <= watch["target"]:
+                message = f"🏷 {watch['name']} is now {price:,.2f} — at or below your {watch['target']:,g}.\n{watch['url']}"
+                keep = False
+            elif last and price < last:
+                message = f"🏷 Price drop: {watch['name']} {last:,.2f} → {price:,.2f} ({(price - last) / last * 100:.0f}%).\n{watch['url']}"
+            watch["last"] = price
+    elif kind == "page":
+        text = page_text(watch["url"])
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if watch.get("hash") and digest != watch["hash"]:
+            old = watch.get("text", "")
+            added = [l[1:].strip() for l in difflib.ndiff(re.split(r"(?<=[.!?])\s+", old), re.split(r"(?<=[.!?])\s+", text))
+                     if l.startswith("+ ") and len(l) > 12][:3]
+            message = f"🔔 {watch['url']} changed." + ("".join(f"\n  + {a[:140]}" for a in added) if added else "")
+        watch["hash"], watch["text"] = digest, text[:20000]
+    elif kind == "quake":
+        since = watch.get("since") or (time.time() - 3600)
+        found = kit.get_json("https://www.seismicportal.eu/fdsnws/event/1/query", {
+            "format": "json", "lat": watch["lat"], "lon": watch["lon"], "maxradius": watch.get("radius_deg", 3),
+            "minmag": watch["min"], "start": datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "limit": 5})
+        quakes = [_quake(f, watch["lat"], watch["lon"]) for f in found.get("features", [])]
+        if quakes:
+            message = "🌍 Earthquake:\n" + "\n".join(q["line"] for q in quakes[:3])
+            watch["since"] = max(q["epoch"] for q in quakes) + 1
+        else:
+            watch["since"] = time.time() - 120
+    return message, keep
 
 
 def _quake(feature: dict, lat: float, lon: float) -> dict:
@@ -382,6 +436,8 @@ class Live:
             try:
                 q = stock_quote(symbol)
             except kit.KitError as exc:
+                if routed and len(symbols) == 1:
+                    return None          # "beef stock?" was a question about soup, not a ticker
                 lines.append(f"  {exc}")
                 continue
             change = (q["price"] - q["previous"]) / q["previous"] * 100 if q["previous"] else 0
@@ -392,7 +448,12 @@ class Live:
     def holidays(self, args: str, routed: bool = False):
         text = args.strip()
         year = int(m.group(0)) if (m := re.search(r"\b20\d{2}\b", text)) else date.today().year
-        country = (re.sub(r"\b20\d{2}\b", "", text).strip() or "TR").upper()[:2]
+        name = re.sub(r"\b20\d{2}\b", "", text).strip().lower()
+        # A name's first two letters are often another country's code:
+        # "germany" fetched GE (Georgia), "austria" AU (Australia).
+        country = COUNTRY_CODES.get(name) or (name.upper() if len(name) == 2 else "") or ("TR" if not name else "")
+        if not country:
+            return f"I don't know the code for '{name}'. Use a two-letter country code: TR, DE, US, GB…"
         try:
             items = kit.get_json(f"https://date.nager.at/api/v3/PublicHolidays/{year}/{country}")
         except kit.KitError:
@@ -497,7 +558,7 @@ class Live:
         if not m:
             return "Usage: /alert <what> > <value>   e.g. /alert usd > 35 · /alert eur/usd < 1.05 · /alert btc > 100000 · /alert thyao > 300"
         op = ">" if m.group(2) in {">", "above", "over", "üstü"} else "<"
-        target = float(m.group(3).replace(",", ""))
+        target = _number(m.group(3))         # "35,5" is 35.5, not 355
         try:
             value, label = quote_value(m.group(1))
         except (kit.KitError, KeyError, Exception) as exc:
@@ -526,7 +587,7 @@ class Live:
             return "I couldn't find a price on that page (some shops hide it from anything but a browser)."
         title = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
         name = html.unescape(title.group(1)).strip()[:80] if title else url
-        target = float(m.group(2).replace(",", "")) if m.group(2) else 0
+        target = _number(m.group(2)) if m.group(2) else 0      # "1.499,90" is 1499.9
         watch = add_watch({"type": "price", "url": url, "name": name, "last": price, "target": target, "every": 4 * 3600})
         return (f"🏷 Watching {name}: now {price:,.2f}." + (f" I'll tell you at {target:,g} or less." if target else
                 " I'll tell you whenever it drops.") + f" (Checked every 4 hours while I'm open; watch {watch['id']}.)")

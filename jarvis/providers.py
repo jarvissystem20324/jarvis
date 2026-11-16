@@ -57,10 +57,11 @@ GEMINI = Provider(
     label="Google Gemini",
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     key_env="GEMINI_API_KEY",
-    # A moving alias, deliberately. Pinning a version here went stale between
-    # two releases — gemini-2.5-flash was retired for new keys — and a dead
-    # default silently demotes the provider on first use.
-    chat_model="gemini-flash-latest",
+    # The user's choice in 10.5.2. Measured on 2026-11-16 on the free tier:
+    # 0.7s for text, 2.2s to read an image, and it calls tools; the moving
+    # alias gemini-flash-latest took 60s and gemini-3.6-flash 41s.
+    # JARVIS_GEMINI_MODEL overrides it the day Google retires it.
+    chat_model="gemini-3.5-flash-lite",
     free=True,
     vision=True,
     signup="https://aistudio.google.com/apikey",
@@ -118,10 +119,11 @@ NVIDIA = Provider(
     # seconds. This one replies in about two seconds and keeps its
     # chain-of-thought in a separate field instead of the reply.
     chat_model="nvidia/nemotron-3-super-120b-a12b",
-    # Images: the one NIM vision model that answered on the free tier on
-    # 2026-09-24 (1.8s). The 90B timed out; three others were 410 Gone.
-    # Without it, a busy Gemini left JARVIS unable to see at all.
-    vision_model="meta/llama-3.2-11b-vision-instruct",
+    # Images. Without one here, a busy Gemini leaves JARVIS unable to see at
+    # all. llama-3.2-11b-vision, chosen on 2026-09-24, answered 410 Gone on
+    # 2026-11-16; Nemotron 3.5 VL read a test image in 3s that day and placed
+    # clicks on a screenshot correctly (on a 0-1 grid), so it also suits Cowork.
+    vision_model="nvidia/nemotron-3.5-super-vl-120b-a12b",
     free=True,
     signup="https://build.nvidia.com",
     notes="Free tier, fast. Most other NIM models time out.",
@@ -136,12 +138,14 @@ MISTRAL = Provider(
     # answered chat and an image in 1.1s each, while mistral-medium and
     # mistral-small answered 429 to every request, even spaced 15s apart.
     # JARVIS_MISTRAL_MODEL=mistral-medium-latest once the plan allows it.
+    # By 2026-11-16 the free key answered 401: Mistral is paid now, so it
+    # sits at the paid end of the chain with Blueminds and OpenAI.
     chat_model="ministral-14b-latest",
     stt_model="voxtral-mini-latest",
     vision=True,
-    free=True,
+    free=False,
     signup="https://console.mistral.ai/api-keys",
-    notes="Free tier, ~1s replies, sees images, also does speech-to-text.",
+    notes="Paid. ~1s replies, sees images, also does speech-to-text.",
 )
 
 CLOUDFLARE = Provider(
@@ -252,7 +256,7 @@ CHAT_PROVIDERS: tuple[Provider, ...] = (
 # paid end in 8.0.1: with credit on the account and a model that answers in
 # half a second, the reason it was opt-in (90 seconds to fail) is gone.
 AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, MISTRAL, CLOUDFLARE, OPENROUTER, BLUEMINDS, OPENAI,
+    GEMINI, GROQ, INCEPTION, NVIDIA, CLOUDFLARE, OPENROUTER, MISTRAL, BLUEMINDS, OPENAI,
 )
 
 # Known, keyed, but never tried unless asked for. A provider that takes 90

@@ -121,6 +121,18 @@ still goes to the AI):
 Reminders, timers and alarms fire only while JARVIS is open; anything that
 came due while it was closed is shown as missed on the next start.
 
+**Every other command, in plain words (10.5.2).** Ask for something to be
+done ("plan a 5-day trip to Rome on 20,000 TL", "make me a worksheet on
+fractions", "1500 liraya yüzde 20 kdv ekle") and JARVIS runs the matching
+command, showing which one: `↪ /tripbudget Rome | 5 | 1 | 20000 TL`. A command
+name that isn't an ordinary word ("kdv 1000") runs straight away. Otherwise a
+short list of likely commands is picked on this PC and a fast free model
+(Gemini 3.5 Flash-Lite and Groq, whichever answers first) chooses one, or
+none, in which case the message goes to the chat as usual. Questions, "make
+it shorter"-style follow-ups and messages holding a key or password never go
+to the chooser. Commands that send, delete, install, print or control a
+device still need their `/`. `/autocommands off` switches it off.
+
 **Quick ask:** **Ctrl+Alt+Space** anywhere opens a small box on top of
 whatever you are doing; the answer appears there and is kept in the chat.
 

@@ -55,7 +55,10 @@ def test_forms_build_the_command_text():
     tool = Tool(name="kdv", fields=(field("amount", "number"), field("rate", "choice", options=("20", "10"))))
     assert tool.build({"amount": "1000", "rate": "20"}) == "/kdv 1000 20"
     tool = Tool(name="merge", fields=(field("template", "file"), field("data", "file", optional=True)))
-    assert tool.build({"template": "C:/a b.docx", "data": ""}) == "/merge C:/a b.docx"
+    # 10.5.2: the separator stays when a field is left blank, so the path keeps its space.
+    built = tool.build({"template": "C:/a b.docx", "data": ""})
+    assert built == "/merge C:/a b.docx |"
+    assert split(built.split(" ", 1)[1], 2) == ["C:/a b.docx", ""]
     assert tool.build({"template": "a.docx", "data": "b.xlsx"}) == "/merge a.docx | b.xlsx"
     assert split("a.docx | b c.xlsx", 2) == ["a.docx", "b c.xlsx"]
     assert split("1000 20", 2) == ["1000", "20"]
@@ -234,7 +237,10 @@ def test_shortcuts_can_be_changed_and_take_effect(app):
 
     prefs.set("shortcuts", {"palette": "<Control-p>"})
     app._bind_shortcuts()
-    assert "<Control-p>" in app._bound_shortcuts and "<Control-k>" not in app._bound_shortcuts
+    assert "<Control-p>" in app._bound_shortcuts
+    # 10.5.2: both cases of a letter go to one dispatcher (Caps Lock), so the
+    # key stays bound; what matters is that no action is on plain Ctrl+K now.
+    assert not any(seq == "<Control-k>" for _aid, seq, *_ in app.shortcut_bindings())
     assert seq_label("<Control-K>") == "Ctrl+Shift+K"
     assert ("Ctrl+P", "Go to any page or tool") in app.shortcut_lines()
     prefs.set("shortcuts", {})

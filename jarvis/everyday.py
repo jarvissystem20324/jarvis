@@ -258,7 +258,10 @@ class Everyday:
     def list_reminders(self, args: str, kinds: set[str] | None = None) -> str:
         verb, _, rest = args.strip().partition(" ")
         if verb.lower() in {"cancel", "delete", "remove", "stop"}:
-            return reminders.board.cancel(rest or "all")
+            if not rest.strip():
+                return "Which one? /reminders cancel <n>, or /reminders cancel all."
+            # /timers only ever touches timers and alarms.
+            return reminders.board.cancel(rest, kinds)
         return (reminders.board.describe(kinds)
                 + "\n\n/reminders cancel <n|all>. They fire only while JARVIS is open.")
 

@@ -345,14 +345,16 @@ def env_file_findings() -> list[tuple[str, str, str]]:
             ))
 
         try:
-            text = env.read_text(encoding="utf-8")
+            text = env.read_text(encoding="utf-8-sig")
         except OSError:
             text = ""
         if "JARVIS_UPDATE_URL" in text:
             for line in text.splitlines():
                 if line.strip().startswith("JARVIS_UPDATE_URL"):
-                    value = line.partition("=")[2].strip()
-                    if value and not value.lower().startswith("https://"):
+                    value = line.partition("=")[2].split(" #", 1)[0].strip().strip("\"'")
+                    # "off" is the documented way to switch updates off.
+                    if value and value.lower() not in {"off", "none", "no", "false", "0"} \
+                            and not value.lower().startswith("https://"):
                         out.append((
                             "high", "Update URL is not HTTPS",
                             f"{value[:60]} — updates would not be fetched securely.",

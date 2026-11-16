@@ -77,11 +77,19 @@ def insert_docstrings(source: str, docs: dict[str, str]) -> tuple[str, int]:
     lines = source.splitlines(keepends=True)
     nodes = [n for n in missing_docstrings(source) if n.name in docs and docs[n.name].strip()]
     added = 0
-    for node in sorted(nodes, key=lambda n: n.body[0].lineno, reverse=True):
+    def top_line(stmt) -> int:
+        # A decorated first member (@property) starts at its decorator: the
+        # docstring went between the decorator and the def, and the result
+        # didn't parse.
+        decorators = getattr(stmt, "decorator_list", None) or []
+        return min([stmt.lineno] + [d.lineno for d in decorators])
+
+    for node in sorted(nodes, key=lambda n: top_line(n.body[0]), reverse=True):
         first = node.body[0]
         if first.lineno == node.lineno:          # one-line body, e.g. def f(): return 1
             continue
-        indent = re.match(r"\s*", lines[first.lineno - 1]).group(0)
+        start = top_line(first)
+        indent = re.match(r"\s*", lines[start - 1]).group(0)
         text = docs[node.name].strip().replace('"""', "'''").replace("\\", "\\\\")
         body = text.splitlines()
         if len(body) == 1:
@@ -89,7 +97,7 @@ def insert_docstrings(source: str, docs: dict[str, str]) -> tuple[str, int]:
         else:
             inner = "".join(f"{indent}{line}\n" if line.strip() else "\n" for line in body[1:])
             block = f'{indent}"""{body[0]}\n{inner}{indent}"""\n'
-        lines.insert(first.lineno - 1, block)
+        lines.insert(start - 1, block)
         added += 1
     return "".join(lines), added
 

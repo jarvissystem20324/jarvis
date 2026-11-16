@@ -336,10 +336,16 @@ class CodingPage(Page):
         node = self.tree.insert("", "end", text=f"📁 {self.root.name}", open=True)
         self.paths[node] = self.root
         self._fill(node, self.root)
-        try:
-            self.app.jarvis.addons.handle("project", str(self.root))
-        except Exception:
-            pass
+        root = str(self.root)
+
+        def tell_jarvis():
+            # Off the window's thread: a big project took seconds to walk.
+            try:
+                self.app.jarvis.addons.handle("project", root)
+            except Exception:
+                pass
+
+        threading.Thread(target=tell_jarvis, daemon=True, name="open-project").start()
         self.refresh_git()
 
     def _fill(self, node, folder: Path) -> None:

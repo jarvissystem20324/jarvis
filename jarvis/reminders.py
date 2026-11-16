@@ -36,10 +36,20 @@ _UNITS = {
     "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600, "saat": 3600,
     "d": 86400, "day": 86400, "days": 86400, "gün": 86400,
 }
-_WORD_NUMBERS = {
-    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "ten": 10,
-    "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "half an": 0.5,
+_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+         "seventeen eighteen nineteen").split()
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+_WORD_NUMBERS: dict[str, float] = {
+    "a": 1, "an": 1, "half an": 0.5, "a couple of": 2, "a few": 3,
+    "bir": 1, "iki": 2, "üç": 3, "dört": 4, "beş": 5, "altı": 6, "yedi": 7, "sekiz": 8, "dokuz": 9, "on": 10,
+    "yirmi": 20, "otuz": 30, "kırk": 40, "elli": 50,
+    **{word: n for n, word in enumerate(_ONES)}, **_TENS,
+    # "forty-five", "twenty five": every tens-and-units pair.
+    **{f"{t}{sep}{u}": _TENS[t] + _ONES.index(u) for t in _TENS for u in _ONES[1:10] for sep in ("-", " ")},
 }
+# Longest first, so "forty-five" wins over "forty" and "half an" over "a".
+_NUMBER_WORDS = "|".join(sorted((re.escape(w) for w in _WORD_NUMBERS), key=len, reverse=True))
+_UNIT_WORDS = r"seconds?|secs?|s|minutes?|mins?|m|dk|dakika|hours?|hrs?|h|saat|saniye|days?|d|gün"
 
 
 @dataclass
@@ -135,34 +145,43 @@ def parse_duration(text: str) -> tuple[float, str] | None:
             if compact.group(group):
                 seconds += int(compact.group(group)[:-1]) * unit
         return float(seconds), compact.group(4).strip(" ,.-:")
-    match = re.match(
-        r"^(?:for\s+)?(half an|an|a|\d+(?:[.,]\d+)?|one|two|three|four|five|ten|fifteen|twenty|thirty|forty|fifty)"
-        r"\s*(seconds?|secs?|s|minutes?|mins?|m|dk|dakika|hours?|hrs?|h|saat|saniye|days?|d|gün)\b(.*)$",
-        text, re.I,
-    )
-    if not match:
+    # Every "<amount> <unit>" in a row adds up: "1 hour 30 minutes" was one
+    # hour, with "30 minutes" left over as the label.
+    pattern = re.compile(rf"^(?:for\s+|and\s+|,\s*)?({_NUMBER_WORDS}|\d+(?:[.,]\d+)?)\s*({_UNIT_WORDS})\b(.*)$", re.I)
+    total, rest, matched = 0.0, text, False
+    while True:
+        match = pattern.match(rest.strip())
+        if not match:
+            break
+        amount = _amount(match.group(1))
+        unit = _UNITS.get(match.group(2).lower())
+        if amount is None or unit is None:
+            break
+        total += amount * unit
+        rest, matched = match.group(3), True
+    if not matched:
         return None
-    amount = _amount(match.group(1))
-    unit = _UNITS.get(match.group(2).lower())
-    if amount is None or unit is None:
-        return None
-    if match.group(1).lower() == "half an":
-        amount = 0.5
-    return amount * unit, match.group(3).strip(" ,.-:")
+    return total, rest.strip(" ,.-:")
 
 
-def parse_clock(text: str, now: datetime | None = None) -> tuple[datetime, str] | None:
-    """'7:30', '5pm', 'tomorrow at 9', 'at 17:45 leave' -> (moment, rest)."""
+def parse_clock(text: str, now: datetime | None = None, later_today: bool = False) -> tuple[datetime, str] | None:
+    """'7:30', '5pm', 'tomorrow at 9', 'at 17:45 leave' -> (moment, rest).
+
+    `later_today`: a bare hour already past today means this evening ("at 5"
+    at 14:00 is 17:00). Reminders ask for that; alarms don't, since "alarm 6"
+    set in the afternoon means 06:00 tomorrow.
+    """
     now = now or datetime.now()
     text = text.strip()
     day_offset = 0
     lowered = text.lower()
-    tonight = False
-    for word, offset in (("tomorrow", 1), ("yarın", 1), ("today", 0), ("bugün", 0), ("tonight", 0)):
+    tonight = said_tonight = False
+    for word, offset in (("tomorrow", 1), ("yarın", 1), ("today", 0), ("bugün", 0), ("tonight", 0), ("bu akşam", 0)):
         if lowered.startswith(word):
             day_offset = offset
             text = text[len(word):].strip(" ,")
-            if word == "tonight" and not re.search(r"\d", text):
+            said_tonight = word in {"tonight", "bu akşam"}
+            if said_tonight and not re.search(r"\d", text):
                 tonight = True
                 text = "20:00 " + text
             break
@@ -177,6 +196,10 @@ def parse_clock(text: str, now: datetime | None = None) -> tuple[datetime, str] 
         hour += 12
     if meridian == "am" and hour == 12:
         hour = 0
+    if said_tonight and not meridian and 1 <= hour <= 11:
+        hour += 12                         # "tonight at 9" is 21:00, not 09:00 tomorrow
+    elif said_tonight and not meridian and hour == 12:
+        hour, day_offset = 0, day_offset + 1     # "tonight at 12" is midnight, not noon tomorrow
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     # A bare number with no colon and no am/pm must look like a time.
@@ -188,7 +211,12 @@ def parse_clock(text: str, now: datetime | None = None) -> tuple[datetime, str] 
         # "Tonight" said at 21:00 still means tonight, not tomorrow night.
         moment = now.replace(second=0, microsecond=0) + timedelta(minutes=30)
     elif moment <= now and day_offset == 0:
-        moment += timedelta(days=1)       # "alarm 7:30" at 22:00 means tomorrow
+        later = moment + timedelta(hours=12)
+        if later_today and not meridian and not match.group(2) and 1 <= hour <= 11 and later > now \
+                and later.date() == now.date():
+            moment = later                # "at 5" said at 14:00 means 17:00 today, not 05:00 tomorrow
+        else:
+            moment += timedelta(days=1)   # "alarm 7:30" at 22:00 means tomorrow
     return moment, match.group(4).strip(" ,.-:")
 
 
@@ -201,11 +229,14 @@ def parse_reminder(text: str, now: datetime | None = None) -> tuple[float, str] 
     def tidy(rest: str) -> str:
         return re.sub(r"^(?:to|that|about|of)\s+", "", rest.strip(" ,.-:"), flags=re.I)
 
-    # "to call Ata in 20 minutes" — the time can come last, too.
-    tail = re.match(r"^(?:to\s+)?(.+?)\s+(in\s+.+|at\s+.+|tomorrow.*|tonight.*)$", body, re.I)
+    # "to call Ata in 20 minutes" — the time can come last, too. Every split
+    # is tried, last first: "to check in with Ali at 5pm" split at its first
+    # "in" found no time and set nothing.
     candidates = [body]
-    if tail:
-        candidates.append(f"{tail.group(2)} to {tail.group(1)}")
+    splits = [m.start() for m in re.finditer(r"\s+(?=(?:in|at)\s|tomorrow\b|tonight\b)", body, re.I)]
+    for at in reversed(splits):
+        what, when = body[:at].strip(), body[at:].strip()
+        candidates.append(f"{when} to {re.sub(r'^to\s+', '', what, flags=re.I)}")
 
     for candidate in candidates:
         lowered = candidate.lower()
@@ -214,7 +245,7 @@ def parse_reminder(text: str, now: datetime | None = None) -> tuple[float, str] 
             if parsed:
                 seconds, rest = parsed
                 return now.timestamp() + seconds, tidy(rest)
-        parsed_clock = parse_clock(candidate, now)
+        parsed_clock = parse_clock(candidate, now, later_today=True)
         if parsed_clock:
             moment, rest = parsed_clock
             return moment.timestamp(), tidy(rest)
@@ -263,6 +294,11 @@ class Board:
         self.items = [r for r in items if not r.fired and r not in late]
         self.missed = []
         for r in late:
+            if r.kind == "prayer":
+                # Keeps its real time, so live_fire sees it is old: moved to
+                # now+30, it announced "İkindi time — 18:15" at start-up.
+                self.items.append(r)
+                continue
             if r.kind in RESUME_KINDS:
                 r.due = now + 30
                 self.items.append(r)
@@ -290,16 +326,27 @@ class Board:
         self.save()
         return item
 
-    def cancel(self, which: str) -> str:
+    def cancel(self, which: str, kinds: set[str] | None = None) -> str:
+        """Cancel by number, text or "all" — only among `kinds` when given.
+
+        "/timers stop" used to call this with "all" and no kinds, which also
+        cancelled every reminder, alarm, briefing, price watch and prayer
+        alert; the watches never came back, as their entry is what re-runs them.
+        """
         which = which.strip().lower()
         with self._lock:
+            mine = [r for r in self.items if kinds is None or r.kind in kinds]
+            if which in {"all", "everything"} and kinds is None:
+                # "/reminders cancel all" is about reminders: price watches,
+                # prayer alerts and the word of the day have their own off
+                # switches, and cancelled here they silently never ran again.
+                mine = [r for r in mine if r.kind not in RESUME_KINDS]
             if which in {"all", "everything"}:
-                count = len(self.items)
-                self.items = []
+                gone = mine
             else:
-                keep = [r for r in self.items if str(r.id) != which and r.text.lower() != which]
-                count = len(self.items) - len(keep)
-                self.items = keep
+                gone = [r for r in mine if str(r.id) == which or r.text.lower() == which]
+            count = len(gone)
+            self.items = [r for r in self.items if r not in gone]
         self.save()
         return f"Cancelled {count}." if count else f"Nothing called '{which}' is pending."
 

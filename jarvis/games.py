@@ -334,7 +334,7 @@ PUZZLES = [
 
 
 def _fold(text: str) -> str:
-    text = text.lower().translate(str.maketrans("çğıöşüâîû", "cgiosuaiu"))
+    text = text.replace("İ", "i").lower().translate(str.maketrans("çğıöşüâîû", "cgiosuaiu"))
     text = re.sub(r"[^a-z0-9 ]", " ", text)
     text = re.sub(r"\b(the|a|an)\b", " ", text)
     return " ".join(text.split())

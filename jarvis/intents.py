@@ -186,9 +186,16 @@ def route(text: str) -> tuple[str, bool] | None:
         return "/record start", False
     if re.fullmatch(r"stop\s+(?:the\s+)?recording|(?:finish|end)\s+(?:the\s+)?recording", low):
         return "/record stop", False
-    m = re.fullmatch(r"(?:i\s+)?(?:just\s+)?(?:spent|paid)\s+(.*\d.*)", t, re.I)
-    if m and not re.search(r"\d\s*(?:hours?|hrs?|minutes?|mins?|days?|weeks?|months?|years?|saat|dakika|gün)\b", low):
-        return f"/spent {m.group(1)}", False
+    # An expense starts with its amount and is short: "I spent 3 nights in
+    # Paris, what should I see?" was logged as ₺3, and "I spent 2020 in…" too.
+    # A year is only a year before "in"/"with": "I spent 2000 on rent" is money.
+    m = re.fullmatch(r"(?:i\s+)?(?:just\s+)?(?:spent|paid)\s+((?:[$€£₺]\s*)?\d[\d.,]*.*)", t, re.I)
+    if m and "?" not in t and len(t.split()) <= 12:
+        amount_on = m.group(1).lstrip("$€£₺ ")
+        if not re.match(r"\d[\d.,]*\s*(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|nights?|weeks?|weekends?|"
+                        r"months?|years?|times?|visits?|saat|dakika|saniye|gün|gece|hafta|ay|yıl)\b", amount_on, re.I) \
+                and not re.match(r"(?:19|20)\d\d\s+(?:in|with|abroad|living)\b", amount_on, re.I):
+            return f"/spent {m.group(1)}", False
     m = re.fullmatch(r"how\s+much\s+(?:did|have)\s+i\s+spen[td](?:\s+(today|this\s+week|this\s+month|last\s+month|this\s+year))?(?:\s+so\s+far)?", low)
     if m:
         return f"/spent {m.group(1) or 'month'}", False
@@ -214,97 +221,6 @@ def route(text: str) -> tuple[str, bool] | None:
     m = re.fullmatch(r"(?:open|launch|start)\s+(?:up\s+)?(.+)", t, re.I)
     if m and len(m.group(1)) <= 60:
         return f"/app {m.group(1)}", True
-    return None
-
-
-_PLACE = r"(?:\s+(?:in|for|near)\s+([a-zçğıöşü][\w .'-]+))?"
-
-# (pattern, command template, may fall through to the AI). Matched against the
-# whole message, case-insensitively; {0}, {1}… are the pattern's groups.
-EIGHT_RULES: list[tuple[str, str, bool]] = [
-    # make and write
-    (r"(?:make|create|build|generate)\s+(?:me\s+)?(?:a\s+)?(?:presentation|slides|slide\s*deck|powerpoint|pptx)\s+(?:about|on|for)\s+(.+)", "/slides {0}", False),
-    (r"(?:write|draft)\s+(?:an?\s+)?e-?mail\s+(.+)", "/email {0}", False),
-    (r"(?:make|draw|create)\s+(?:me\s+)?a\s+mind\s*map\s+(?:of|about|on|for)\s+(.+)", "/mindmap {0}", False),
-    (r"(?:make|draw|create)\s+(?:me\s+)?a\s+flow\s*chart\s+(?:of|about|on|for|showing)\s+(.+)", "/flowchart {0}", False),
-    (r"(?:make|build|create)\s+(?:me\s+)?a\s+(?:website|web\s*page|landing\s*page)\s+(?:for|about)\s+(.+)", "/website {0}", False),
-    (r"cite\s+((?:https?://|10\.\d{4}|\d{9,13}).+)", "/cite {0}", False),
-    # study
-    (r"solve\s+(.*[=<>].*|.*\b(?:derivative|integral|integrate|limit|factor|simplify)\b.*)", "/solve {0}", True),
-    (r"(?:the\s+)?(?:derivative|integral)\s+of\s+(.+)", "/solve {0}", True),
-    (r"(?:define|definition\s+of|meaning\s+of)\s+([\w'-]+)", "/define {0}", True),
-    (r"what\s+does\s+([\w'-]+)\s+mean", "/define {0}", True),
-    (r"([\w'-]+)\s+ne\s+demek", "/define {0}", True),
-    (r"(?:synonyms?|antonyms?)\s+(?:of|for)\s+(\S+)", "/synonyms {0}", False),
-    (r"(?:wikipedia|wiki)\s+(.+)", "/wiki {0}", False),
-    (r"look\s+up\s+(.+?)\s+on\s+wikipedia", "/wiki {0}", False),
-    (r"(?:give\s+me\s+(?:the\s+)?)?word\s+of\s+the\s+day", "/word", False),
-    (r"(?:start\s+a\s+|do\s+a\s+|take\s+a\s+)?typing\s+(?:speed\s+)?test", "/typing", False),
-    (r"(?:review|study)\s+(?:my\s+)?(?:flash\s*cards|cards)", "/cards review", False),
-    # everyday
-    (r"add\s+(.+?)\s+to\s+my\s+(?:to-?do\s+|todo\s+|shopping\s+)?list", "/mylist add {0}", False),
-    (r"(?:what'?s|what\s+is|show)\s+(?:on\s+)?my\s+(?:to-?do\s+|todo\s+)?list|my\s+to-?do\s+list", "/mylist", False),
-    (r"split\s+(?:the\s+bill\s+(?:of\s+)?)?(\d[\d.,]*)\s+(?:between|among|by|for)\s+(\d+)(?:\s+people)?(.*)", "/split {0} {1}{2}", False),
-    (r"when\s+should\s+i\s+(?:wake\s+up|go\s+to\s+(?:bed|sleep))(?:\s+if\s+i\s+(?:wake\s+up\s+at|want\s+to\s+wake\s+(?:up\s+)?at)\s+(.+))?", "/sleepcalc {0}", False),
-    (r"flip\s+a\s+coin|yazı\s+tura", "/roll coin", False),
-    (r"roll\s+(?:a\s+)?(?:dice|die|(\d*d\d+))", "/roll {0}", False),
-    (r"pick\s+(?:one\s+)?(?:between|from|of)?:?\s*(.+\s(?:or|,)\s.+)", "/pick {0}", False),
-    (r"(?:a\s+)?random\s+number\s+(?:between|from)\s+(-?\d+)\s+(?:and|to)\s+(-?\d+)", "/random {0}-{1}", False),
-    (r"what\s+can\s+i\s+(?:cook|make)\s+with\s+(.+)", "/fridge {0}", False),
-    (r"(?:what'?s|what\s+is)\s+on\s+my\s+calendar(?:\s+(today|tomorrow|this\s+week))?", "/cal {0}", False),
-    (r"add\s+(.+?)\s+to\s+my\s+calendar\s+(.+)", "/cal add {0} {1}", False),
-    # live
-    (r"(?:(?:what\s+are\s+)?(?:the\s+)?prayer\s+times|namaz\s+vakitleri|ezan\s+vakti|when\s+is\s+the\s+next\s+prayer)" + _PLACE, "/prayer {0}", False),
-    (r"(?:any\s+)?(?:recent\s+|latest\s+)?(?:earthquakes?|son\s+depremler|deprem)(?:\s+(?:near\s+me|nearby))?" + _PLACE, "/quake {0}", False),
-    (r"(?:the\s+)?(?:gold\s+price|price\s+of\s+gold|how\s+much\s+is\s+gold|altın\s+(?:fiyatı|ne\s+kadar)|gram\s+altın)", "/gold", False),
-    (r"(?:the\s+)?(?:price\s+of\s+|how\s+much\s+is\s+)?(bitcoin|btc|ethereum|eth|solana|sol|dogecoin|doge|xrp|bnb)(?:\s+price)?(?:\s+now)?", "/crypto {0}", False),
-    (r"(?:the\s+)?(?:stock|share)\s+price\s+of\s+(\S+)", "/stock {0}", True),
-    (r"(\S+)\s+(?:stock|shares?|hisse(?:si)?)(?:\s+price)?", "/stock {0}", True),
-    (r"(?:the\s+)?(?:next\s+)?public\s+holidays?|resmi\s+tatiller?", "/holidays", False),
-    (r"(?:the\s+)?(?:latest\s+)?news\s+(?:about|on)\s+(.+)", "/news {0}", False),
-    (r"(?:how'?s\s+the\s+|what'?s\s+the\s+)?air\s+quality" + _PLACE, "/air {0}", False),
-    (r"(?:when\s+is\s+)?(?:the\s+)?(?:sunset|sunrise)(?:\s+time)?(?:\s+today)?" + _PLACE, "/sun {0}", False),
-    (r"(?:alert|tell)\s+me\s+(?:when|if)\s+(?:the\s+)?(.+?)\s+(?:goes\s+|is\s+|gets\s+)?(above|below|over|under)\s+([\d.,]+)", "/alert {0} {1} {2}", False),
-    # PC and files
-    (r"(?:find|show)\s+duplicate\s+files(?:\s+in\s+(.+))?", "/dupes {0}", False),
-    (r"(?:turn\s+|switch\s+)?(on|off)\s+dark\s+mode", "/darkmode {0}", False),
-    (r"dark\s+mode\s+(on|off)", "/darkmode {0}", False),
-    (r"(?:set|change|make)\s+(?:my\s+|the\s+)?(?:desktop\s+)?(?:wallpaper|background)\s+(?:to\s+|of\s+)?(?:an?\s+)?(.+)", "/wallpaper {0}", False),
-    (r"(?:what\s+are\s+)?(?:my\s+)?(?:pc|computer|system)\s+(?:specs|specifications|info)|what\s+pc\s+do\s+i\s+have", "/specs", False),
-    (r"is\s+(?:this|my)\s+wi-?fi\s+safe|wi-?fi\s+(?:safety|security)\s+check", "/wifisafe", False),
-    (r"what\s+wi-?fi\s+am\s+i\s+on|wi-?fi\s+(?:info|status|signal)", "/wifi", False),
-    (r"(?:clean\s+up|free\s+up\s+space\s+on)\s+(?:my\s+)?(?:pc|computer|disk|temp\s+files)|free\s+up\s+(?:disk\s+)?space", "/cleanup", False),
-    (r"(?:turn\s+)?(on|off)\s+do\s+not\s+disturb(.*)", "/dnd {0}{1}", False),
-    (r"do\s+not\s+disturb\s+(on|off)(.*)", "/dnd {0}{1}", False),
-    (r"(?:my\s+)?screen\s+time(?:\s+(today|this\s+week|week))?", "/screentime {0}", False),
-    (r"(?:what'?s|who'?s)\s+(?:using|on|running\s+on)\s+port\s+(\d+)", "/port {0}", False),
-    # security
-    (r"(?:is\s+this\s+link\s+safe|check\s+this\s+link|is\s+this\s+(?:a\s+)?phishing(?:\s+link)?)\s*:?\s*(\S+)", "/checklink {0}", False),
-    (r"(?:check|test)\s+(?:how\s+strong\s+)?my\s+password(?:\s+strength)?", "/passcheck", False),
-    (r"(?:was|has|is)\s+my\s+password\s+(?:been\s+)?(?:leaked|pwned|breached|hacked)", "/pwned", False),
-    (r"(?:my\s+)?2fa\s+codes?|show\s+my\s+(?:2fa|authenticator)\s+codes?", "/2fa", False),
-    (r"(?:which|what)\s+apps?\s+(?:used|are\s+using|is\s+using)\s+my\s+(?:camera|webcam|mic|microphone)", "/camcheck", False),
-    (r"(?:scan\s+for|check\s+for)\s+(?:suspicious|malicious)\s+(?:processes|programs|apps)", "/procscan", False),
-    # fun and connections
-    (r"(?:let'?s\s+)?play\s+trivia(?:\s+(?:about|on)\s+(.+))?", "/trivia {0}", False),
-    (r"(?:let'?s\s+)?play\s+(?:20|twenty)\s+questions", "/20q", False),
-    (r"(?:tell\s+me\s+)?a\s+fun\s+fact|fun\s+fact", "/funfact", False),
-    (r"add\s+(.+?)\s+to\s+my\s+watch\s*list", "/watchlist add {0}", False),
-    (r"(?:show\s+)?my\s+watch\s*list", "/watchlist", False),
-    (r"(?:send\s+a\s+)?whatsapp\s+(?:to\s+)?(\S+?)\s*(?::|\s+saying|\s+that)\s*(.+)", "/whatsapp {0}: {1}", False),
-    (r"(?:check|summari[sz]e|read)\s+my\s+(?:e-?mail|inbox|mail)", "/inbox", False),
-    (r"(?:what'?s\s+on\s+)?my\s+google\s+calendar(?:\s+(today|this\s+week|week))?", "/gcal {0}", False),
-]
-
-
-def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
-    """Plain words for the 8.0 commands. Anchored like everything above."""
-    for pattern, template, fall_through in EIGHT_RULES:
-        m = re.fullmatch(pattern, t, re.I)
-        if m:
-            command = template.format(*[g or "" for g in m.groups()], *([""] * 4))
-            command = re.sub(r"\s+", " ", command).strip().replace("this week", "week")
-            return command, fall_through
     return None
 
 
@@ -343,9 +259,14 @@ def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
         # study
         (r"solve\s+(.*[=<>].*|.*\b(?:derivative|integral|integrate|limit|factor|simplify)\b.*)", "/solve {0}", True),
         (r"(?:the\s+)?(?:derivative|integral)\s+of\s+(.+)", "/solve {0}", True),
+        # Turkish puts the word first: "merhaba ne demek".
+        (r"([a-zA-Zçğıöşüİ'-]+)\s+ne\s+demek(?:tir)?", "/define {0}", True),
         (r"(?:define|definition\s+of|meaning\s+of|what\s+does\s+([a-zA-Zçğıöşü'-]+)\s+mean|ne\s+demek)\s*([a-zA-Zçğıöşü' -]*)", "/define {0}{1}", True),
         (r"(?:synonyms?|antonyms?)\s+(?:of|for)\s+(\S+)", "/synonyms {0}", False),
-        (r"(?:wikipedia|look\s+up\s+(.+?)\s+on\s+wikipedia|wiki)\s*(.*)", "/wiki {0}{1}", False),
+        (r"look\s+up\s+(.+?)\s+on\s+wikipedia", "/wiki {0}", False),
+        # "wikipedia is unreliable, right?" is an opinion question, not a lookup.
+        (r"(?:wikipedia|wiki)(?::|\s+(?:for|on|about))?\s+(?!(?:is|was|are|has|says?|can|isn'?t|wasn'?t)\b)([^?]+)",
+         "/wiki {0}", False),
         (r"(?:give\s+me\s+(?:the\s+)?)?word\s+of\s+the\s+day", "/word", False),
         (r"(?:start\s+a\s+|do\s+a\s+|take\s+a\s+)?typing\s+(?:speed\s+)?test", "/typing", False),
         (r"(?:review|study)\s+(?:my\s+)?(?:flash\s*cards|cards)", "/cards review", False),
@@ -375,7 +296,9 @@ def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
         # PC and files
         (r"(?:find|show)\s+duplicate\s+files(?:\s+in\s+(.+))?", "/dupes {0}", False),
         (r"(?:turn\s+|switch\s+)?(on|off)\s+dark\s+mode|dark\s+mode\s+(on|off)", "/darkmode {0}{1}", False),
-        (r"(?:set|change|make)\s+(?:my\s+|the\s+)?(?:desktop\s+)?(?:wallpaper|background)\s+(?:to\s+|of\s+)?(?:an?\s+)?(.+)", "/wallpaper {0}", False),
+        # "wallpaper" or "desktop background" must be said: "make the background
+        # of this image white" generated a wallpaper.
+        (r"(?:set|change|make)\s+(?:my\s+|the\s+)?(?:desktop\s+(?:wallpaper|background)|wallpaper)\s+(?:to\s+|into\s+)?(?:an?\s+)?(.+)", "/wallpaper {0}", False),
         (r"(?:what\s+are\s+)?(?:my\s+)?(?:pc|computer|system)\s+(?:specs|specifications|info)|what\s+pc\s+do\s+i\s+have", "/specs", False),
         (r"(?:is\s+(?:this|my)\s+wi-?fi\s+safe|wi-?fi\s+(?:safety|security)\s+check)", "/wifisafe", False),
         (r"(?:what\s+wi-?fi\s+am\s+i\s+on|wi-?fi\s+(?:info|status|signal))", "/wifi", False),
@@ -400,19 +323,16 @@ def _route_eight(t: str, low: str) -> tuple[str, bool] | None:
         (r"(?:check|summari[sz]e|read)\s+my\s+(?:e-?mail|inbox|mail)", "/inbox", False),
         (r"(?:what'?s\s+on\s+)?my\s+google\s+calendar(?:\s+(today|this\s+week|week))?", "/gcal {0}", False),
     ]
-    # Names go on designs as written: "a logo for Ada Coffee" must not become "ada coffee".
-    keep_case = ("/cal", "/mylist", "/fridge", "/thumbnail", "/sale", "/poster", "/logo", "/greeting", "/menu",
-                 "/invitation", "/sticker", "/orgchart", "/familytree", "/timeline", "/gantt", "/comparison",
-                 "/kanban", "/wireframe", "/design", "/ytslides", "/quizslides")
+    # Arguments keep the case they were typed in: names on designs, WhatsApp
+    # messages ("İyi akşamlar" lowercased into a stray dot) and short links
+    # (bit.ly/3AbC is not bit.ly/3abc). The patterns ignore case themselves.
     for pattern, template, fall_through in rules:
-        m = re.fullmatch(pattern, t if template.startswith(keep_case) else low, re.I)
-        if m is None:
-            m = re.fullmatch(pattern, t, re.I)
+        m = re.fullmatch(pattern, t, re.I)
         if m:
             groups = [g or "" for g in m.groups()]
             command = template.format(*groups, *([""] * 4))
             command = re.sub(r"\s+", " ", command).strip()
-            if command == "/screentime this week":
-                command = "/screentime week"
+            if command.startswith(("/screentime", "/gcal")):
+                command = re.sub(r"\bthis\s+week\b", "week", command, flags=re.I)
             return command, fall_through
     return None

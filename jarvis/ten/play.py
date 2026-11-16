@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from .. import kit, music
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Music and games"
 _last_stations: list[dict] = []
@@ -74,6 +74,29 @@ def _wait_and_report() -> str:
         if now["error"] or now["state"] in {music.PLAYING, music.PAUSED}:
             break
     return now_playing_text()
+
+
+def _playlist_parts(verb: str, rest: str) -> tuple[str, str]:
+    """(playlist name, the rest) for /playlist.
+
+    With a "|" the user said where the name ends. Without one, a known
+    playlist's name is matched at the start ("play Gym shuffle", "add Gym
+    tarkan"); a new name ("new Road trip") is the whole text. Splitting at the
+    first space cut "Road trip" to "Road"; taking the whole text made "Gym
+    shuffle" a playlist that doesn't exist.
+    """
+    if "|" in rest:
+        name, extra = split(rest, 2)
+        return name.strip(), extra
+    words = rest.strip()
+    for known in sorted(music.playlist_names(), key=len, reverse=True):
+        if words.lower() == known.lower() or words.lower().startswith(known.lower() + " "):
+            return known, words[len(known):].strip()
+    if verb in {"new", "create", "save", "delete", "show", "play"}:
+        name = re.sub(r"\s+shuffle$", "", words, flags=re.I) if verb == "play" else words
+        return name, words[len(name):].strip()
+    first, _, remainder = words.partition(" ")
+    return first, remainder.strip()
 
 
 class Play:
@@ -148,8 +171,7 @@ class Play:
         text = args.strip().rstrip("|").strip()
         verb, _, rest = text.partition(" ")
         verb = verb.lower()
-        name, extra = split(rest, 2)
-        name = name.strip()
+        name, extra = _playlist_parts(verb, rest)
         if not text or verb == "list":
             names = music.playlist_names()
             if not names:
@@ -420,7 +442,7 @@ class Play:
     def guide_cmd(self, args: str, routed: bool = False):
         from .. import shield, websearch
 
-        game, question = split(args, 2)
+        game, question = split_free(args, 2)
         if not game.strip() or not question.strip():
             return "Usage: /guide Elden Ring | where is the Bloodhound's Fang"
         try:
@@ -492,7 +514,7 @@ class Play:
     def teams_cmd(self, args: str, routed: bool = False):
         import random
 
-        names_text, count_text = split(args, 2)
+        names_text, count_text = split_free(args, 2)
         players = []
         for part in re.split(r"[,\n;]+", names_text):
             name, _, skill = part.strip().partition(":")
@@ -543,7 +565,7 @@ class Play:
                      field("genre", "text", "Genre", "pop", optional=True, hint="pop, rap, arabesk, rock…"),
                      field("language", "choice", "Language", "Türkçe", ("Türkçe", "English"))))
     def lyrics_cmd(self, args: str, routed: bool = False):
-        about, genre, language = split(args, 3)
+        about, genre, language = split_free(args, 3)
         if not about.strip():
             return "Usage: /lyrics a summer in Bodrum with friends | pop | Türkçe"
         prompt = (

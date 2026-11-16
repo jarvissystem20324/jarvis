@@ -27,7 +27,7 @@ from pathlib import Path
 import psutil
 
 from .. import alerts, kit, security
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "PC and files"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -154,10 +154,15 @@ def disks() -> list[dict]:
     out = []
     for r in rows:
         extra = counters.get(str(r.get("DeviceId")), {})
-        out.append({"name": r.get("FriendlyName"), "type": {3: "HDD", 4: "SSD"}.get(r.get("MediaType"), "disk"),
+        # Newer PowerShell gives these as words ("SSD", "SATA"), older as numbers.
+        media, bus = r.get("MediaType"), r.get("BusType")
+        out.append({"name": r.get("FriendlyName"),
+                    "type": media if isinstance(media, str) and media not in {"", "Unspecified"} else
+                    {3: "HDD", 4: "SSD"}.get(media, "disk"),
                     "health": {0: "Healthy", 1: "Warning", 2: "Unhealthy"}.get(r.get("HealthStatus"),
                                                                                str(r.get("HealthStatus"))),
-                    "size": r.get("Size"), "bus": {7: "USB", 11: "SATA", 17: "NVMe"}.get(r.get("BusType"), ""),
+                    "size": r.get("Size"),
+                    "bus": bus if isinstance(bus, str) and bus != "Unknown" else {7: "USB", 11: "SATA", 17: "NVMe"}.get(bus, ""),
                     "temp": extra.get("Temperature") or None, "wear": extra.get("Wear"),
                     "errors": (extra.get("ReadErrorsTotal") or 0) + (extra.get("WriteErrorsTotal") or 0),
                     "hours": extra.get("PowerOnHours")})
@@ -590,7 +595,7 @@ class System:
              fields=(field("archive", "file", "Archive", types=(("Archives", "*.zip *.7z *.rar *.tar *.gz *.tgz"),)),
                      field("folder", "folder", "Into (blank: next to it)", optional=True)))
     def unzip_cmd(self, args: str, routed: bool = False):
-        archive_text, folder = split(args, 2)
+        archive_text, folder = split_free(args, 2)
         archive = kit.path_arg(archive_text)
         if archive is None or not archive.is_file():
             return "Usage: /unzip <archive>"

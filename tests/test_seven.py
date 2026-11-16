@@ -235,7 +235,8 @@ def test_a_busy_gemini_does_not_leave_jarvis_blind(monkeypatch):
     monkeypatch.setattr(providers, "chat_chain", lambda: [providers.GROQ, providers.NVIDIA])
     brain = Brain()
     attempts = brain._attempts(brain._chain(vision=True), vision=True)
-    assert [(p.name, m) for p, m, _t, _x in attempts] == [("nvidia", "meta/llama-3.2-11b-vision-instruct")]
+    # llama-3.2-11b-vision was retired (410 Gone) by 2026-11-16.
+    assert [(p.name, m) for p, m, _t, _x in attempts] == [("nvidia", "nvidia/nemotron-3.5-super-vl-120b-a12b")]
 
 
 # --- the conversation ------------------------------------------------------------------------

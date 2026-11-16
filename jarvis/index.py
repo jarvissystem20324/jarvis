@@ -101,7 +101,8 @@ def build(root: Path) -> Index:
             break
         if not path.is_file() or path.suffix.lower() not in CODE_SUFFIXES:
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
+        # Inside the project only: a project kept in C:\build\shop was skipped whole.
+        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES:

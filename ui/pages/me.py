@@ -107,10 +107,14 @@ class VoicePage(Hub):
         ctk.CTkSwitch(card.inner, text="Speak my answers", variable=self.voice_var,
                       command=self.app._toggle_voice).pack(anchor="w")
         voices = dict(neural.VOICES)
+        # As in Settings: without it, a saved "offline" showed as Ryan, and
+        # Preview or Save switched speech back to the online service.
+        voices["offline"] = "Windows voice (offline)"
         self.voice_menu = ctk.CTkOptionMenu(card.inner, values=list(voices.values()), width=280, fg_color=c["bg"],
                                             button_color=c["accent_dim"])
         current = get_setting("JARVIS_NEURAL_VOICE", neural.DEFAULT_VOICE)
         self.voice_menu.set(voices.get(current, voices[neural.DEFAULT_VOICE]))
+        self._voice_at_open = self.voice_menu.get()
         self.voice_menu.pack(anchor="w", pady=6)
         self._voice_codes = {v: k for k, v in voices.items()}
         label(card.inner, "Speed", size=11, muted=True).pack(anchor="w")
@@ -157,8 +161,10 @@ class VoicePage(Hub):
     def save(self) -> None:
         from ui.settings import write_env
 
-        values = {"JARVIS_NEURAL_VOICE": self._voice_codes.get(self.voice_menu.get(), ""),
-                  "JARVIS_VOICE_RATE": f"{int(self.rate.get()):+d}%"}
+        values = {"JARVIS_VOICE_RATE": f"{int(self.rate.get()):+d}%"}
+        if self.voice_menu.get() != self._voice_at_open:
+            values["JARVIS_NEURAL_VOICE"] = self._voice_codes.get(self.voice_menu.get(), "")
+            self._voice_at_open = self.voice_menu.get()
         write_env(values)
         os.environ.update(values)
         self.note.configure(text="Saved.")
@@ -166,7 +172,8 @@ class VoicePage(Hub):
     def save_keys(self) -> None:
         from ui.settings import write_env
 
-        values = {env: entry.get().strip() or "off" for env, entry in self.entries.items()}
+        # A cleared box means the default, not "off" (type "off" to switch one off).
+        values = {env: entry.get().strip() for env, entry in self.entries.items()}
         write_env(values)
         os.environ.update(values)
         self.note.configure(text="Shortcuts saved — restart JARVIS to use them.")

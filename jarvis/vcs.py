@@ -86,6 +86,48 @@ def _secret_check(root: Path) -> list:
             if f.level == "high"]
 
 
+_BRANCH_READS = {"-a", "-r", "-v", "-vv", "-l", "--all", "--remotes", "--verbose", "--list", "--show-current",
+                 "--merged", "--no-merged", "--contains", "--no-contains", "--points-at"}
+# Branch options whose next word is their value, not a branch to create.
+_BRANCH_VALUED = {"--merged", "--no-merged", "--contains", "--no-contains", "--points-at", "--sort", "--format"}
+_CONFIG_WRITES = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e", "--rename-section",
+                  "--remove-section"}
+# git 2.46+ spells them as subcommands too: git config set/unset/edit/…
+_CONFIG_WRITE_VERBS = {"set", "unset", "edit", "rename-section", "remove-section"}
+
+
+def _changes_repo(sub: str, rest: list[str]) -> bool:
+    """Would this 'read' git command change something? 10.5.2: branch -D,
+    config <key> <value>, remote set-url and log --output=… all ran unasked."""
+    if any(a.startswith("--output") for a in rest):
+        return True
+    if sub == "branch":
+        listing = any(a in {"-l", "--list"} for a in rest)
+        skip = False
+        for a in rest:
+            if skip:
+                skip = False
+                continue
+            if a in _BRANCH_VALUED:
+                skip = True          # "--merged main": main is the value
+                continue
+            if a in _BRANCH_READS or a.startswith(("--sort=", "--format=", "--color", "--column")):
+                continue
+            if a.startswith("-") or not listing:
+                return True
+        return False
+    if sub == "config":
+        positional = [a for a in rest if not a.startswith("-")]
+        if positional and positional[0] in _CONFIG_WRITE_VERBS:
+            return True
+        return any(a in _CONFIG_WRITES for a in rest) or len(positional) >= 2
+    if sub == "remote":
+        # "remote -v set-url …" is still set-url: look past the -v.
+        words = [a for a in rest if a not in {"-v", "--verbose"}]
+        return bool(words) and words[0] not in {"show", "get-url"}
+    return False
+
+
 def handle(root: Path, args: str) -> str:
     """Run one git command. Writes ask permission; reads do not."""
     if not is_repo(root):
@@ -103,6 +145,10 @@ def handle(root: Path, args: str) -> str:
 
     sub = parts[0].lower()
     rest = parts[1:]
+
+    if sub in READ_ONLY and _changes_repo(sub, rest):
+        return (f"git {' '.join(parts)} would change the repository (or write a file), and /git only runs "
+                "those after asking: use add, commit, checkout or push here, or run it yourself in a terminal.")
 
     if sub in READ_ONLY:
         extra = ["--short", "--branch"] if sub == "status" else []

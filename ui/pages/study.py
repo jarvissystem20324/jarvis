@@ -279,6 +279,11 @@ class _Drill(ctk.CTkFrame):
         return f"best_{type(self).__name__}"
 
     def start(self) -> None:
+        # One clock: pressing Start again used to add a second after() chain,
+        # and the round ran down twice as fast.
+        if getattr(self, "_tick_job", None):
+            self.after_cancel(self._tick_job)
+            self._tick_job = None
         self.score = 0
         self.left = self.ROUND
         self.next_question()
@@ -299,7 +304,7 @@ class _Drill(ctk.CTkFrame):
             self.status.configure(text=f"Best: {max(best, self.score)}" + ("  🏆 new best!" if self.score > best else ""))
             return
         self.status.configure(text=f"{self.left}s · score {self.score}")
-        self.after(1000, self._tick)
+        self._tick_job = self.after(1000, self._tick)
 
     def check(self) -> None:
         if self.left <= 0:
@@ -422,6 +427,7 @@ class SpeedReader(ctk.CTkFrame):
         self.running = False
 
     def start(self) -> None:
+        self._cancel()
         self.words = self.text.get("1.0", "end").split()
         self.index = 0
         self.running = True
@@ -429,6 +435,13 @@ class SpeedReader(ctk.CTkFrame):
 
     def stop(self) -> None:
         self.running = False
+        self._cancel()
+
+    def _cancel(self) -> None:
+        # ▶ pressed twice ran two word chains at once: double the speed.
+        if getattr(self, "_job", None):
+            self.after_cancel(self._job)
+            self._job = None
 
     def _next(self) -> None:
         if not self.running or self.index >= len(self.words):
@@ -444,4 +457,4 @@ class SpeedReader(ctk.CTkFrame):
             delay *= 1.8
         elif word.endswith(","):
             delay *= 1.3
-        self.after(int(delay), self._next)
+        self._job = self.after(int(delay), self._next)

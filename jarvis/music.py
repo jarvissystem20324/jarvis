@@ -97,7 +97,9 @@ def describe(path: Path) -> tuple[str, str]:
 
 
 def _norm(text: str) -> str:
-    return text.lower().translate(str.maketrans("çğıöşüâî", "cgiosuai"))
+    # "İ" first: .lower() makes it "i" plus a combining dot, so "İzel" never
+    # matched a search for "izel".
+    return text.replace("İ", "i").lower().translate(str.maketrans("çğıöşüâî", "cgiosuai"))
 
 
 def search(songs: list[Path], query: str) -> list[Path]:

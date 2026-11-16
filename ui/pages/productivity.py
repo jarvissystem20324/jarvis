@@ -452,6 +452,9 @@ class NotesPage(Page):
         self.backlinks = label(editor, "", size=11, muted=True, wrap=600)
         self.backlinks.pack(anchor="w")
         self.folder = "All"
+        # So what's typed on the first visit, before any note is opened, is
+        # kept too (it wasn't: there was nothing to compare against).
+        self._loaded = self._snapshot()
 
     def on_show(self) -> None:
         self.fill_folders()
@@ -492,7 +495,21 @@ class NotesPage(Page):
                           else "transparent", hover_color=c["accent_dim"], text_color=c["text"],
                           command=lambda n=note: self.open(n)).pack(fill="x", pady=1)
 
+    def _snapshot(self) -> tuple[str, str, str]:
+        return (self.title_entry.get().strip(), self.text.get("1.0", "end").rstrip(),
+                self.folder_entry.get().strip())
+
+    def _autosave(self) -> None:
+        """Keep what was typed before the editor is cleared: opening another
+        note, starting a new one or leaving the page used to drop it."""
+        if getattr(self, "_loaded", None) is not None and self._snapshot() != self._loaded:
+            self.save()
+
+    def on_hide(self) -> None:
+        self._autosave()
+
     def new_note(self, title: str = "") -> None:
+        self._autosave()
         self.current = None
         self.title_entry.delete(0, "end")
         if title:
@@ -502,8 +519,14 @@ class NotesPage(Page):
         self.text.delete("1.0", "end")
         self.backlinks.configure(text="")
         self.text.focus_set()
+        self._loaded = self._snapshot()
 
     def open(self, note: dict) -> None:
+        self._autosave()
+        if self.current and note.get("id") == self.current.get("id"):
+            # The note already open: the list button holds the copy from
+            # before the save above, and reloading it threw the edit away.
+            note = self.current
         self.current = note
         self.title_entry.delete(0, "end")
         self.title_entry.insert(0, note.get("title", ""))
@@ -515,6 +538,7 @@ class NotesPage(Page):
         back = work.backlinks(note.get("title", ""))
         self.backlinks.configure(text=("Linked from: " + ", ".join(n["title"] for n in back)) if back else "")
         self.fill_list()
+        self._loaded = self._snapshot()
 
     def save(self) -> None:
         title = self.title_entry.get().strip()
@@ -525,6 +549,7 @@ class NotesPage(Page):
         note.update(title=title or body.splitlines()[0][:60], body=body,
                     folder=self.folder_entry.get().strip() or "Notes")
         self.current = work.save_note(note)
+        self._loaded = self._snapshot()
         self.saved.configure(text=f"Saved {time.strftime('%H:%M:%S')}")
         self.fill_folders()
         self.fill_list()
@@ -532,6 +557,7 @@ class NotesPage(Page):
     def delete(self) -> None:
         if self.current:
             work.delete_note(self.current["id"])
+        self._loaded = None            # gone on purpose: not saved back on the way out
         self.new_note()
         self.fill_folders()
         self.fill_list()

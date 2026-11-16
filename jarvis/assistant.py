@@ -10,7 +10,7 @@ from . import (
     agent, history, i18n, index, modes, personality, providers, scanner,
     schedule, security, tools, usage, vcs, websearch,
 )
-from . import library, safety, shield, vault
+from . import autocmd, library, safety, shield, vault
 from . import trace as trace_mod
 from .addons import AddonManager
 from .brain import Brain
@@ -367,6 +367,15 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
             if isinstance(handled, JarvisResponse):
                 return handled
             return JarvisResponse(text=str(handled))
+
+        # 10.5.2: any other command, asked for in plain words. The reply says
+        # which one ran, so a wrong guess shows and the slash form is learnt.
+        picked = autocmd.route(text)
+        if picked is not None:
+            security.audit.record("plain-words command", picked.split()[0])
+            response = self.process(picked)
+            response.text = f"↪ {picked}\n\n{response.text}"
+            return response
 
         context = self.addons.context_for(text) or ""
         sources = ""
@@ -1209,11 +1218,15 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
             return "\n".join(lines)
 
         if verb == "new":
-            name = rest or f"chat-{len(history.list_chats()) + 1}"
-            self.save_history()
+            # Never onto an existing conversation: "Ideas" and "ideas" share a
+            # file, and chat-N repeats after a delete. Both were overwritten.
+            asked = rest or f"chat-{len(history.list_chats()) + 1}"
+            self.save_history()            # first, so the open chat's own file counts as taken
+            name = history.free_name(asked)
             history.set_current(name)
             self.brain.clear_history()
-            return f"Started '{name}'. The previous conversation is saved and /chat lists them."
+            renamed = f" ('{asked}' already exists)" if name != asked else ""
+            return f"Started '{name}'{renamed}. The previous conversation is saved and /chat lists them."
 
         if verb == "delete":
             if not rest:
@@ -1228,8 +1241,18 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
             return f"There is no conversation called '{rest}'."
 
         # Anything else is a name to switch to.
-        target = args.strip()
+        return self.switch_chat(args.strip())
+
+    def switch_chat(self, target: str) -> str:
+        """Open a saved conversation by name, without reading verbs into it.
+
+        The sidebar calls this directly: through /chat, a chat titled "New
+        Year Plans" started a new chat called "Year Plans" instead.
+        """
         known = {c["name"] for c in history.list_chats()}
+        if target not in known:
+            # Names are stored as typed; their files ignore case.
+            target = next((name for name in known if history._slug(name) == history._slug(target)), target)
         if target not in known:
             return (
                 f"No conversation called '{target}'.\n"

@@ -8,6 +8,7 @@ alerts posted from worker threads arrive through safe_after.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import tkinter
@@ -64,8 +65,12 @@ def event_sequence(event) -> str | None:
         key = key.upper() if shift else key.lower()
     elif shift:
         mods.append("Shift")
-    if not mods and not key.startswith("F"):
+    # Only real function keys work alone: "F" (a capital F) once passed as one.
+    if not mods and not re.fullmatch(r"F\d{1,2}", key):
         return None
+    # "<Control-1>" is Ctrl + mouse button 1 to Tk; a digit key needs "Key-".
+    if key.isdigit():
+        key = f"Key-{key}"
     return "<" + "-".join(mods + [key]) + ">"
 
 

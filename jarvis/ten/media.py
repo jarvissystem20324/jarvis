@@ -98,7 +98,9 @@ def parse_ops(text: str) -> list[tuple[str, float | None]]:
     read as a change ("+20%" → 1.2).
     """
     ops: list[tuple[str, float | None]] = []
-    for part in re.split(r"[,;\n]+|\band\b|\bve\b", text.lower()):
+    # "black and white" is one change, not two: joined before splitting on "and".
+    text = re.sub(r"\b(?:black\s+(?:and|&)\s+white|siyah\s+(?:ve\s+)?beyaz)\b", "bw", text.lower())
+    for part in re.split(r"[,;\n]+|\band\b|\bve\b", text):
         words = part.split()
         if not words:
             continue
@@ -112,7 +114,9 @@ def parse_ops(text: str) -> list[tuple[str, float | None]]:
         if m:
             value = float(m.group(1).replace(",", "."))
             if m.group(2) and name in {"brightness", "contrast", "saturation"}:
-                value = 1 + value / 100
+                # "darker 20%" lowers it; it used to brighten by 20%.
+                down = any(w in words for w in ("darker", "less", "koyu", "daha az")) or value < 0
+                value = 1 - abs(value) / 100 if down else 1 + value / 100
         if name == "brightness" and value is None:
             value = 0.8 if "darker" in words else 1.2
         ops.append((name, value))

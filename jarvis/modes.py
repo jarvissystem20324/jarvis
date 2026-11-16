@@ -105,9 +105,10 @@ HIGH = Mode(
     ),
     max_tokens=3072,
     temperature=0.7,
-    # Measured at ~6s. Heavier than Mid's diffusion model and on a different
-    # provider, so High is not just Mid with a longer prompt.
-    targets=(("gemini", "gemini-3.6-flash"),),
+    # On a different provider from Mid's diffusion model, so High is not just
+    # Mid with a longer prompt. gemini-3.6-flash took 41s on the free tier on
+    # 2026-11-16; 3.5 Flash-Lite, the user's Gemini default, answered in 0.7s.
+    targets=(("gemini", "gemini-3.5-flash-lite"),),
     accent="#f59e0b",
 )
 

@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from fractions import Fraction
 
 from .. import alerts, daily, kit, money, prefs, spending, turkey
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 EVERYDAY, HEALTH, TR = "Everyday", "Health and money", "Türkiye"
 NOT_ADVICE = "(General information, not medical advice.)"
@@ -499,7 +499,7 @@ class Lifestyle:
                      field("what", "text", "What for", optional=True)),
              template="{payer} paid {amount} for {people} | {what}")
     def owe_cmd(self, args: str, routed: bool = False):
-        text, what = split(args, 2)
+        text, what = split_free(args, 2)
         low = text.strip().lower()
         if low == "clear":
             money.OWES.save([])
@@ -525,7 +525,7 @@ class Lifestyle:
                                              field("allowed", "text", "Allowed categories", "bills, groceries")),
              template="start {days} | {allowed}")
     def nospend_cmd(self, args: str, routed: bool = False):
-        text, allowed = split(args, 2)
+        text, allowed = split_free(args, 2)
         low = text.strip().lower()
         if low.startswith("start"):
             m = re.search(r"\d+", low)
@@ -585,7 +585,7 @@ class Lifestyle:
              icon="🍲", page="turkey", fields=(field("dish", "text", "Yemek", hint="Karnıyarık"),
                                               field("people", "number", "Kişi", "4")))
     def tarif_cmd(self, args: str, routed: bool = False):
-        dish, people = split(args, 2)
+        dish, people = split_free(args, 2)
         if not dish.strip():
             return "Kullanım: /tarif mercimek çorbası | 4"
         with kit.more_room(self.brain, 2500):

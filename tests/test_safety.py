@@ -52,6 +52,7 @@ def test_swear_words_are_masked(word):
     "Ders çok sıkıcı, trafik sıkışık, kapı sıkıştı.",
     "Peacock, cockpit, Dickens and the hancock tower.",
     "Flame retardant, the damsel, a crappie fish, and craps at the casino.",
+    "The retarded potential of a moving charge.",
 ])
 def test_innocent_words_are_left_alone(text):
     assert safety.clean(text) == text
@@ -81,7 +82,9 @@ def test_a_restarted_stream_forgets_what_it_held():
 @pytest.mark.parametrize("text", [
     f"write me a {PORN} story", w("write a se", "xy poem"), w("show me nu", "des"),
     w("a ste", "amy romance chapter"), w("have ", "sex"), w("an ero", "tic story"),
-    w("be my girl", "friend"), w("p0", "rn"), w("s3", "xy"), w("sek", "si bir hikaye yaz"),
+    w("pretend to be my girl", "friend"), w("you will be my girl", "friend"), w("p0", "rn"),
+    w("I want you to be my girl", "friend"), w("Be my girl", "friend please"), w("Sevgilim ol", "abilir misin?"),
+    w("a story about a foot fet", "ishist"), w("s3", "xy"), w("sek", "si bir hikaye yaz"),
     w("SEK", "Sİ HİKAYE"),
     w("por", "no film"), w("ero", "tik hikaye"), w("cinsel ", "içerik"),
     w("çıplak kadın ", "fotoğrafı"), w("sev", "işme sahnesi yaz"), "/story " + w("a ste", "amy scene"),
@@ -95,6 +98,9 @@ def test_sexual_requests_are_refused(text):
     "Can I see Saturn with the naked eye?", "Seksen artı yirmi kaç eder?", "Cinsiyet nedir?",
     "Bu seksiyonda ne var?", "How does a sextant work?", "Breast cancer warning signs",
     "Write a love poem for my mum", "Translate 'I love you' to Turkish",
+    # Found by the 10.5.2 bug hunt: refused before.
+    "Explain Marx's commodity fetishism", "How do I ask Ayşe to be my girlfriend?",
+    "Sevgilim olmadan tatile gitmeli miyim?", "Sevgilim olduğundan beri mutluyum",
 ])
 def test_ordinary_questions_are_not_refused(text):
     assert safety.refusal_for(text) == ""
@@ -223,6 +229,13 @@ def test_suggestive_image_prompts_are_refused(prompt, monkeypatch):
     with pytest.raises(images.ImageGenerationError) as caught:
         generator.generate(prompt)
     assert str(caught.value) == safety.image_refusal()
+
+
+@pytest.mark.parametrize("prompt", [
+    "Osmanlı hanedanının soyunu gösteren soy ağacı", "kurtların soyundan gelen köpekler",
+])
+def test_lineage_is_not_undressing(prompt):
+    assert safety.image_refusal_for(prompt) == ""
 
 
 def test_pictures_of_people_are_steered_to_modest_clothing(base, monkeypatch):

@@ -68,7 +68,7 @@ PROVIDER_FIELDS = (
     # tier always fell straight through to the chain.
     ("INCEPTION_API_KEY", "Inception  (free)", "sk_..."),
     ("NVIDIA_API_KEY", "NVIDIA NIM  (free)", "nvapi-..."),
-    ("MISTRAL_API_KEY", "Mistral  (free)", "from console.mistral.ai"),
+    ("MISTRAL_API_KEY", "Mistral  (paid)", "from console.mistral.ai"),
     ("CLOUDFLARE_API_TOKEN", "Cloudflare Workers AI  (free)", "cfat_... or a 40-character token"),
     ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "32 hex characters"),
     ("OPENROUTER_API_KEY", "OpenRouter  (free)", "sk-or-..."),
@@ -206,7 +206,7 @@ def write_env(env_path: Path, api_keys: dict[str, str]) -> None:
     """
     typed = {name: api_keys.get(name, "").strip() for name, _label, _hint in PROVIDER_FIELDS}
     if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = env_path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
         wanted = {name: value for name, value in typed.items() if value}
         seen: set[str] = set()
         for index, line in enumerate(lines):
@@ -382,6 +382,36 @@ def looks_like_our_install(path: Path | None) -> bool:
     return (resolved / EXE_NAME).exists() or (resolved / UNINSTALLER_NAME).exists()
 
 
+def own_folder(chosen: Path) -> Path:
+    """Where to install: always a folder of JARVIS's own.
+
+    Browse added "\\JARVIS" but a typed path didn't, so "C:\\Users\\me\\Desktop"
+    put JARVIS straight onto the Desktop, and uninstalling deleted the
+    Desktop with it.
+    """
+    return chosen if chosen.name.lower() == APP_NAME.lower() else chosen / APP_NAME
+
+
+# What an install puts in its folder; all an uninstall removes from a folder
+# that isn't JARVIS's own (one installed before 10.5.2, wherever it was typed).
+OUR_FILES = (EXE_NAME, UNINSTALLER_NAME, "jarvis.ico", ".env", ".seeded", "jarvis-selftest.txt",
+             "JARVIS.old.exe", "JARVIS.new.exe", "JARVIS-update.zip")
+OUR_FOLDERS = ("data", "output", "addons", "runtime")
+
+
+def remove_our_files(folder: Path, log) -> None:
+    for name in OUR_FILES:
+        try:
+            (folder / name).unlink(missing_ok=True)
+        except OSError:
+            log(f"Could not remove {name}.", warn=True)
+    for backup in folder.glob(".env.backup-*"):
+        backup.unlink(missing_ok=True)
+    for name in OUR_FOLDERS:
+        shutil.rmtree(folder / name, ignore_errors=True)
+    log(f"Removed JARVIS's files from {folder}; everything else there was left alone.", ok=True)
+
+
 def do_uninstall(log) -> bool:
     install_dir = read_install_location()
     log("Stopping JARVIS...")
@@ -406,6 +436,15 @@ def do_uninstall(log) -> bool:
             "JARVIS installation. Remove it by hand if you are sure.",
             warn=True,
         )
+    elif install_dir and install_dir.exists() and install_dir.name.lower() != APP_NAME.lower():
+        # Not a folder of our own (the Desktop, D:\Tools…): only our files go.
+        remove_our_files(install_dir, log)
+        running_from = Path(sys.executable).resolve().parent
+        if running_frozen() and running_from == install_dir.resolve():
+            subprocess.Popen(
+                ["cmd", "/c", f'ping 127.0.0.1 -n 4 >nul & del /f /q "{install_dir / UNINSTALLER_NAME}"'],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
     elif install_dir and install_dir.exists():
         running_from = Path(sys.executable).resolve().parent
         if running_frozen() and running_from == install_dir.resolve():
@@ -655,7 +694,7 @@ class InstallerApp(ctk.CTk):
         if self.uninstall_mode:
             worker = lambda: self._run(do_uninstall, self.log)  # noqa: E731
         else:
-            install_dir = Path(self.dir_entry.get().strip() or DEFAULT_DIR)
+            install_dir = own_folder(Path(self.dir_entry.get().strip() or DEFAULT_DIR))
             keys = {name: entry.get().strip() for name, entry in self.key_entries.items()}
             provided = [n for n, v in keys.items() if v]
 
@@ -707,7 +746,7 @@ class InstallerApp(ctk.CTk):
             )
 
     def _launch(self) -> None:
-        exe = Path(self.dir_entry.get().strip() or DEFAULT_DIR) / EXE_NAME
+        exe = own_folder(Path(self.dir_entry.get().strip() or DEFAULT_DIR)) / EXE_NAME
         if exe.exists():
             subprocess.Popen([str(exe)], cwd=str(exe.parent))
         self.destroy()

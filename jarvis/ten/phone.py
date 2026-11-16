@@ -7,10 +7,13 @@ from __future__ import annotations
 import mimetypes
 
 from .. import kit
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Phone"
 _tvs: list[dict] = []
+# True when /cast switched the phone link's server on, so /cast stop turns it
+# off again rather than leaving it listening on the network.
+_cast_started_link = False
 
 
 def stop_server() -> None:
@@ -60,18 +63,28 @@ class Phone:
              help="plays a file from this PC on your TV (DLNA)", title="Cast to TV", icon="📺", page="phone",
              fields=(field("file", "file", "Video, music or photo"), field("tv", "text", "TV", optional=True)))
     def cast_cmd(self, args: str, routed: bool = False):
-        global _tvs
+        global _tvs, _cast_started_link
         from .. import dlna, phonelink
 
-        path_text, tv = split(args, 2)
-        if path_text.strip().lower() in {"stop", "pause"}:
+        path_text, tv = split_free(args, 2)
+        word = path_text.strip().lower()
+        if word in {"stop", "pause"}:
             if not _tvs:
                 return "📺 Nothing is casting."
             try:
-                (dlna.stop if path_text.strip().lower() == "stop" else dlna.pause)(_tvs[0])
+                (dlna.stop if word == "stop" else dlna.pause)(_tvs[0])
             except dlna.CastError as exc:
                 return f"📺 {exc}"
-            return "📺 Stopped." if path_text.strip().lower() == "stop" else "📺 Paused."
+            if word == "pause":
+                return "📺 Paused."
+            # The TV no longer needs the file: take its link away, and the
+            # server too if only casting had started it.
+            phonelink.link.casts.clear()
+            if _cast_started_link:
+                phonelink.link.stop()
+                _cast_started_link = False
+            _tvs = []
+            return "📺 Stopped."
         path = kit.path_arg(path_text)
         if path is None or not path.is_file():
             return "Usage: /cast C:/Videos/holiday.mp4 [| living room TV]"
@@ -84,6 +97,7 @@ class Phone:
         try:
             if not phonelink.link.running:
                 phonelink.link.start(self)
+                _cast_started_link = True
             mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
             dlna.play(chosen[0], phonelink.link.cast_url(path), path.stem, mime)
         except (OSError, dlna.CastError) as exc:

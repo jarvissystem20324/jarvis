@@ -160,12 +160,18 @@ class AddonManager:
                 self.errors.append(f"{path.name}: {self._last_line()}")
 
     def _seed_bundled(self, folder: Path) -> None:
-        """Copy the built-in addons out of a frozen build, once.
+        """Copy the built-in addons out of a frozen build, and keep them current.
 
         They travel inside the EXE but have to live on disk beside it, both so
         the loader can see them and so users can open one up to see how an
-        addon is written. Existing files are never overwritten — an edited or
-        deleted addon stays edited or deleted across updates.
+        addon is written.
+
+        Until 10.5.2 they were copied once and never again, so every copy kept
+        its first version: the user's own EXE ran a pre-3.1 code_mode, and
+        /agent, /fix and /testgen crashed on methods it didn't have. Now
+        .seeded records each file's checksum as placed. A file still matching
+        it is the user's untouched copy and is updated; an edited one is left
+        alone, and a deleted one stays deleted.
         """
         if not getattr(sys, "frozen", False):
             return
@@ -173,31 +179,50 @@ class AddonManager:
         if not source.is_dir():
             return
 
+        import hashlib
+
+        def digest(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
         marker = folder / ".seeded"
-        already = set()
+        recorded: dict[str, str] = {}      # name -> checksum when placed ("" from before 10.5.2)
         if marker.exists():
             try:
-                already = set(marker.read_text(encoding="utf-8").split())
+                for line in marker.read_text(encoding="utf-8").splitlines():
+                    name, _, checksum = line.strip().partition(" ")
+                    if name:
+                        recorded[name] = checksum.strip()
             except OSError:
-                already = set()
+                recorded = {}
 
-        seeded = set(already)
+        seeded = dict(recorded)
         for item in sorted(source.glob("*.py")):
             target = folder / item.name
-            # Only place an addon we've never placed before, so one the user
-            # deleted on purpose doesn't reappear at every update.
-            if item.name in already or target.exists():
-                seeded.add(item.name)
-                continue
             try:
+                new = digest(item)
+                if item.name not in recorded:
+                    if not target.exists():
+                        shutil.copy2(item, target)
+                    seeded[item.name] = digest(target)
+                    continue
+                if not target.exists() or recorded[item.name] == new:
+                    continue                          # deleted on purpose, or already current
+                current = digest(target)
+                if recorded[item.name] and current != recorded[item.name]:
+                    continue                          # the user's own edit: never overwritten
+                if not recorded[item.name]:
+                    # Placed before checksums were kept, so whether it was edited
+                    # can't be told: the old one is kept beside it, not loaded.
+                    shutil.copy2(target, target.with_suffix(".py.bak"))
                 shutil.copy2(item, target)
-                seeded.add(item.name)
+                seeded[item.name] = new
             except OSError as exc:
                 self.errors.append(f"{item.name}: could not be installed — {exc}")
 
-        if seeded != already:
+        if seeded != recorded:
             try:
-                marker.write_text("\n".join(sorted(seeded)), encoding="utf-8")
+                marker.write_text("\n".join(f"{n} {h}".strip() for n, h in sorted(seeded.items())),
+                                  encoding="utf-8")
             except OSError:
                 pass
 

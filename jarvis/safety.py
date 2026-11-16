@@ -50,7 +50,9 @@ _SWEARING = [
     r"\w*asshole\w*", r"dumbass\w*", r"jackass\w*", r"ass", r"arsehole\w*", r"dickhead\w*",
     r"cunt\w*", r"twat\w*", r"wank\w*", r"bollocks", r"piss(?:ed|ing|es)?", r"slut\w*",
     r"whore\w*", r"(?:god)?damn(?:ed|it)?", r"dammit", r"crap(?:py)?", r"wtf", r"stfu",
-    r"nigg(?:er|ers|a|as|az)", r"fag(?:got|gots|s)?", r"retard(?:ed|s)?",
+    # "retarded" stays a slur, but not in physics ("retarded potential").
+    r"nigg(?:er|ers|a|as|az)", r"fag(?:got|gots|s)?", r"retards?",
+    r"retarded(?!\s+(?:potential|potentials|time|field|fields|green|solution|wave|propagator|acceleration))",
     r"amk", r"am[ıi]na\s+koy\w*", r"amına\w*", r"amc[ıi]k\w*", r"orospu\w*", r"piç\w*",
     r"sik(?:tir\w*|erim|eyim|ik\w*|iş\w*|tiğ\w*|ici\w*)", r"anan[ıi]\s+sik\w*",
     r"yarra?k\w*", r"dalyarak\w*", r"göt(?:ü|ün|ünü|e|veren\w*|lek\w*)?", r"gotveren\w*",
@@ -66,19 +68,28 @@ _SEXUAL = [
     r"sexual(?:ly)?\s+(?:explicit|content|stor(?:y|ies)|role-?play|scenes?|fantas(?:y|ies)|chat)",
     r"sex\s+(?:scenes?|stor(?:y|ies)|chat|role-?play|tapes?|positions?|toys?)",
     r"(?:have|having|had)\s+sex", r"mak(?:e|ing)\s+love", r"horny", r"lewd\w*",
-    r"fetish\w*", r"onlyfans", r"strip\s?(?:club|tease)\w*", r"topless",
+    r"fetish(?!ism\b)\w*", r"onlyfans", r"strip\s?(?:club|tease)\w*", r"topless",
     r"boobs?", r"titties", r"booty\s+call", r"seduc\w*", r"sensual\w*", r"orgasm\w*",
     r"masturbat\w*", r"blowjobs?", r"handjobs?", r"dirty\s+talk\w*", r"smut\w*",
     r"(?:spicy|steamy)\s+(?:stor(?:y|ies)|scenes?|fanfic\w*|role-?play|chapters?|romance)",
     r"rule\s?34",
-    r"flirt\w*\s+(?:with\s+me|role-?play)", r"be\s+my\s+(?:girlfriend|boyfriend|lover|waifu)",
+    # Role-play with JARVIS, not advice: "how do I ask Ayşe to be my
+    # girlfriend?" is a fair question.
+    r"flirt\w*\s+(?:with\s+me|role-?play)",
+    r"(?:you|u)\s+(?:to\s+|will\s+|would\s+|can\s+|could\s+|should\s+)?be\s+my\s+(?:girlfriend|boyfriend|lover|waifu)",
+    # Said to JARVIS at the start: "be my girlfriend (please)". Asking how to
+    # ask someone ("…ask Ayşe to be my girlfriend") doesn't start this way.
+    r"(?<!to\s)be\s+my\s+(?:girlfriend|boyfriend|lover|waifu)(?:\s+please)?(?=\s*[.!]?\s*$)",
+    r"(?:pretend|act|roleplay|role-play)\s+(?:to\s+be\s+|as\s+|like\s+)?(?:you'?re\s+)?my\s+(?:girlfriend|boyfriend|lover|waifu)",
     r"(?:girlfriend|boyfriend|lover|waifu)\s+(?:role-?play|mode|persona)",
     r"porno\w*", r"seks(?:i(?!yon)\w*|üel\w*|ten|e|le)?", r"sevi[şs](?:me\w*|mek|elim|tik\w*)",
     r"erotik\w*", r"müstehcen\w*", r"yeti[şs]kin\s+içerik\w*", r"striptiz\w*", r"fetiş\w*",
     r"mastürbasyon\w*", r"orgazm\w*", r"ba[şs]tan\s+ç[ıi]kar\w*", r"[şs]ehvet\w*",
     r"cinsel\s+(?:içerik|hikay\w*|hikây\w*|sahne\w*|fantezi\w*)",
     r"ç[ıi]plak\s+(?:kad[ıi]n\w*|k[ıi]z\w*|erkek\w*|foto\w*|resim\w*|beden\w*)",
-    r"sevgilim\s+ol\w*", r"sevgili\s+rol\w*",
+    # "sevgilim ol" (be my lover), not "sevgilim olmadan" (without my partner).
+    r"sevgilim\s+ol(?:ur\s+musun|abilir\s+misin|mak\s+ister\s+misin|sana|\s+(?:benim|lütfen)|\b)",
+    r"sevgili\s+rol\w*",
 ]
 
 # Pictures get a stricter list: an image model needs no help to make an
@@ -90,7 +101,9 @@ _IMAGE_EXTRA = [
     r"hot\s+(?:girls?|wom[ae]n|babes?|models?|chicks?)", r"babes?", r"undress\w*",
     r"(?:without|no)\s+cloth(?:es|ing)", r"see-?through", r"wet\s+(?:t-?shirt|dress)\w*",
     r"penis\w*", r"vagina\w*", r"genital\w*", r"buttocks", r"nipples?", r"xxx",
-    r"ç[ıi]plak\w*", r"iç\s+çama[şs][ıi]r\w*", r"mayolu\w*", r"dekolte\w*", r"soyun\w*",
+    # soyun- as undressing ("soyunmuş"), not soy (lineage): "soyundan gelen".
+    r"ç[ıi]plak\w*", r"iç\s+çama[şs][ıi]r\w*", r"mayolu\w*", r"dekolte\w*",
+    r"soyun(?:ma|mu[şs]|uk|du|uyor|an|sun|urken|arak)\w*",
     r"üstsüz\w*", r"popo(?:su|lu)?",
 ]
 

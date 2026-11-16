@@ -27,14 +27,26 @@ from .config import get_setting
 _PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("KEY", re.compile(
         r"\b(?:sk-(?:proj-|ant-|or-v1-)?[A-Za-z0-9_\-]{20,}"
+        r"|sk_(?:live_|test_)?[A-Za-z0-9_]{20,}"             # Inception, Stripe
         r"|gsk_[A-Za-z0-9]{20,}"
         r"|nvapi-[A-Za-z0-9_\-]{20,}"
         r"|AIza[A-Za-z0-9_\-]{30,}"
+        r"|AQ\.[A-Za-z0-9_\-]{30,}"                           # Google's newer key form
+        r"|fc-[0-9a-f]{32}"                                   # Firecrawl
+        r"|hf_[A-Za-z0-9]{30,}"                               # Hugging Face
+        r"|cfat_[A-Za-z0-9_\-]{20,}"                          # Cloudflare"
         r"|gh[pousr]_[A-Za-z0-9]{30,}"
         r"|github_pat_[A-Za-z0-9_]{30,}"
         r"|AKIA[A-Z0-9]{16}"
         r"|xox[baprs]-[A-Za-z0-9\-]{10,}"
         r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})"
+    )),
+    # api_key = …, token: …, secret=… — whatever the key looks like. A value
+    # with a digit and no dots or call after it: `api_key = settings.API_KEY`
+    # and `token = request.headers.get(…)` are code, not secrets.
+    ("KEY", re.compile(
+        r"(?i)(?<![A-Za-z])(?:api[_\- ]?key|apikey|access[_\- ]?token|token|secret|client[_\- ]?secret)"
+        r"(?:\s+is|\s*[:=])\s*[\"']?((?=[A-Za-z0-9_\-/+]*\d)[A-Za-z0-9_\-/+]{16,})(?![.(\w])"
     )),
     # password: hunter2 / pwd = "x" / şifre: x / "my password is x"
     ("PASSWORD", re.compile(
@@ -53,6 +65,17 @@ _PLACEHOLDER = re.compile(r"\[(KEY|PASSWORD|EMAIL|CARD|PHONE)-(\d+)\]")
 
 def enabled() -> bool:
     return get_setting("JARVIS_REDACT", "on").strip().lower() not in {"0", "off", "false", "no"}
+
+
+def _own_secrets() -> list[str]:
+    """Values of the keys and tokens in JARVIS's settings, longest first."""
+    import os
+
+    values = {
+        value.strip() for name, value in os.environ.items()
+        if re.search(r"(?:_API_KEY|_TOKEN|_SECRET|_PASSWORD)$", name) and len(value.strip()) >= 12
+    }
+    return sorted(values, key=len, reverse=True)
 
 
 def _luhn(digits: str) -> bool:
@@ -100,10 +123,15 @@ class Redactor:
     def mask(self, text: str) -> str:
         if not text or not isinstance(text, str):
             return text
+        # The keys JARVIS itself holds, whatever their shape: a Mistral or
+        # Cloudflare key matches no pattern, and was sent as it was.
+        for value in _own_secrets():
+            if value in text:
+                text = text.replace(value, self._token("KEY", value))
         for kind, pattern in _PATTERNS:
             def replace(match: re.Match, kind=kind) -> str:
                 whole = match.group(0)
-                if kind == "PASSWORD":
+                if match.groups() and match.group(1) and kind in {"PASSWORD", "KEY"}:
                     secret = match.group(1)
                     return whole.replace(secret, self._token(kind, secret))
                 if kind == "CARD":

@@ -35,6 +35,9 @@ os.environ["LLMSRELAY_API_KEY"] = ""
 # Since 10.0.2 a blank address means GitHub's; no window a test opens should
 # go looking for an update.
 os.environ["JARVIS_UPDATE_URL"] = "off"
+# 10.5.2's plain-words commands ask a model which command was meant; tests
+# that stub only brain.chat would otherwise reach a real provider.
+os.environ["JARVIS_AUTO_COMMANDS"] = "off"
 
 
 def fake_key(prefix: str, body: str = "AbCdEf0123456789AbCdEf0123456789") -> str:

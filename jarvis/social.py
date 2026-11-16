@@ -72,7 +72,9 @@ def fetch_mail(account: dict, limit: int = 15, hours: int = 36) -> list[dict]:
     try:
         box.login(account["user"], account["password"])
         box.select("INBOX", readonly=True)
-        since = (date.today() - timedelta(hours=hours // 24 or 1)).strftime("%d-%b-%Y")
+        # Whole days back (IMAP's SINCE takes a date): timedelta(hours=1) off a
+        # date changed nothing, so last night's mail was never fetched.
+        since = (date.today() - timedelta(days=max(1, -(-hours // 24)))).strftime("%d-%b-%Y")
         _, data = box.search(None, f'(SINCE "{since}")')
         ids = data[0].split()[-limit:]
         mails = []
@@ -115,8 +117,8 @@ def expand_ics(events: list[dict], raw: str, start: datetime, end: datetime) -> 
                 until = None
         days = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
         byday = [days[d[-2:]] for d in params.get("BYDAY", "").split(",") if d[-2:] in days]
-        moment = datetime.fromtimestamp(event["start"])
-        n = 0
+        moment = origin = datetime.fromtimestamp(event["start"])
+        n = steps = 0
         while n < count and moment < end and (until is None or moment < until) and n < 2000:
             candidates = [moment]
             if freq == "WEEKLY" and byday:
@@ -131,11 +133,22 @@ def expand_ics(events: list[dict], raw: str, start: datetime, end: datetime) -> 
             step = {"DAILY": timedelta(days=interval), "WEEKLY": timedelta(weeks=interval)}.get(freq)
             if step:
                 moment += step
-            elif freq == "MONTHLY":
-                month = moment.month - 1 + interval
-                moment = moment.replace(year=moment.year + month // 12, month=month % 12 + 1)
-            elif freq == "YEARLY":
-                moment = moment.replace(year=moment.year + interval)
+            elif freq in {"MONTHLY", "YEARLY"}:
+                # Counted from the first date, skipping months without its day
+                # (the 31st, 29 February), as calendars do. replace() on such a
+                # month raised, and every /gcal failed.
+                import calendar
+
+                while True:
+                    steps += interval
+                    total = origin.month - 1 + steps * (12 if freq == "YEARLY" else 1)
+                    year, month = origin.year + total // 12, total % 12 + 1
+                    if origin.day <= calendar.monthrange(year, month)[1]:
+                        moment = origin.replace(year=year, month=month)
+                        break
+                    if steps > 1200:
+                        moment = end
+                        break
             else:
                 break
     return sorted(out, key=lambda e: e["start"])

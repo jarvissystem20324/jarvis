@@ -263,7 +263,8 @@ def _fill_text(frame, el: dict, size_px: float, emu: float, effects: bool = Fals
     frame.vertical_anchor = {"top": MSO_ANCHOR.TOP, "middle": MSO_ANCHOR.MIDDLE,
                              "bottom": MSO_ANCHOR.BOTTOM}[el.get("valign", "top")]
     align = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER, "right": PP_ALIGN.RIGHT}[el.get("align", "left")]
-    lines = str(el.get("text", "")).split("\n")
+    # "\v" too: designs saved before 10.5.2 still hold PowerPoint's soft breaks.
+    lines = str(el.get("text", "")).replace("\v", "\n").split("\n")
     if el.get("curve"):
         lines = [" ".join(lines)]
         _warp(frame, el["curve"])
@@ -489,11 +490,15 @@ def _export(shapes, el: dict, emu: float, tmp: Path):
                     el.get("stripe") if r % 2 == 0 and el.get("stripe") else el.get("bg") or "#ffffff"))
                 frame_ = cell.text_frame
                 frame_.text = ""
-                run = frame_.paragraphs[0].add_run()
-                run.text = value
                 style = dict(el, bold=bool(header), color=el.get("header_color") if header else el.get("color"),
                              italic=False, underline=False)
-                _font(run, style, size, emu)
+                # One paragraph per line: a run writes "\v" as "_x000B_" and
+                # "\n" as a raw newline, not a line break.
+                for i, line in enumerate(str(value).replace("\v", "\n").split("\n")):
+                    paragraph = frame_.paragraphs[0] if i == 0 else frame_.add_paragraph()
+                    run = paragraph.add_run()
+                    run.text = line
+                    _font(run, style, size, emu)
         return frame
     return None
 
@@ -539,7 +544,7 @@ def import_pptx(path: Path) -> dict:
                     continue
             try:
                 if slide.has_notes_slide:
-                    page["notes"] = slide.notes_slide.notes_text_frame.text
+                    page["notes"] = slide.notes_slide.notes_text_frame.text.replace("\v", "\n")
             except Exception:
                 pass
             page["transition"] = _transition_of(slide)
@@ -678,7 +683,7 @@ def _import_shape(design: dict, page: dict, shape, scale: float, group: tuple, t
             return
     if getattr(shape, "has_table", False) and shape.has_table:
         table = shape.table
-        rows = [[cell.text for cell in row.cells] for row in table.rows]
+        rows = [[cell.text.replace("\v", "\n") for cell in row.cells] for row in table.rows]
         props = {}
         try:
             props["fill"] = _solid(table.cell(0, 0).fill) or "#4f8ef7"
@@ -721,7 +726,9 @@ def _import_shape(design: dict, page: dict, shape, scale: float, group: tuple, t
         pass
     text = ""
     if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
-        text = "\n".join(p.text for p in shape.text_frame.paragraphs).strip("\n")
+        # A soft line break (Shift+Enter) comes in as "\v"; kept, it was
+        # exported back as the literal text "_x000B_".
+        text = "\n".join(p.text for p in shape.text_frame.paragraphs).replace("\v", "\n").strip("\n")
     is_title = False
     is_body = False
     try:

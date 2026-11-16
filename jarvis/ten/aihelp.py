@@ -13,7 +13,7 @@ import concurrent.futures as futures
 import re
 
 from .. import kit, providers, security, shield
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Chat and AI"
 
@@ -135,7 +135,7 @@ class AIHelp:
              page="memory", fields=(field("topic", "text", "Statement", "Homework should be banned"),
                                     field("rounds", "choice", "Rounds", "2", ("1", "2", "3", "4"))))
     def debate_cmd(self, args: str, routed: bool = False):
-        topic, rounds = split(args, 2)
+        topic, rounds = split_free(args, 2)
         if not topic:
             return "Usage: /debate <statement> | 2"
         rounds = kit.whole(rounds, 2, 1, 4)
@@ -207,6 +207,21 @@ class AIHelp:
         wrapped, _ = shield.wrap(text[:12000], "the selected text")
         return self.brain.ask_once(f"{shield.RULE}\nThe user selected this text in another app:\n{wrapped}\n\n"
                                    f"Their question: {question or 'Explain this briefly.'}\nAnswer briefly.").strip()
+
+    @command("autocommands", "plainwords", group=G, usage="/autocommands [on|off]",
+             help="run commands from plain words, without the /", title="Commands without /", icon="↪",
+             page="memory", fields=(field("state", "choice", "Turn", "on", ("on", "off")),))
+    def autocommands_cmd(self, args: str, routed: bool = False):
+        from .. import autocmd
+
+        word = args.strip().lower()
+        if word in {"on", "off"}:
+            self._write_setting(autocmd.SETTING, word)
+        state = "on" if autocmd.enabled() else "off"
+        return (f"↪ Commands without the / are {state}. "
+                + ("Ask for something in plain words, like “plan a 5-day trip to Rome on 20,000 TL”, and JARVIS "
+                   "runs the matching command and shows which one. Commands that send, delete, install or control "
+                   "a device still need their /." if state == "on" else "Only messages starting with / run commands."))
 
     @command("errors", "errorlog", group=G, usage="/errors [open|clear]",
              help="what went wrong inside JARVIS lately (the error log, for reporting a bug)", title="Error log",

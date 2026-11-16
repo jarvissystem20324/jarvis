@@ -62,6 +62,16 @@ def _ui():
     return app
 
 
+def _clipboard_seq() -> int:
+    """Windows' clipboard change counter (0 where there is none)."""
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetClipboardSequenceNumber())
+    except Exception:
+        return 0
+
+
 def _rot(x: float, y: float, degrees: float) -> tuple[float, float]:
     a = math.radians(degrees)
     return x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
@@ -1352,6 +1362,7 @@ class DesignPage(DesignTools, ctk.CTkFrame):
         chosen = self.selected_all()
         if chosen:
             self._element_clip = [model.clone(e) for e in chosen]
+            self._clip_seq = _clipboard_seq()
             self._say("Copied." if len(chosen) == 1 else f"Copied {len(chosen)}.")
 
     def cut_element(self) -> None:
@@ -1359,12 +1370,17 @@ class DesignPage(DesignTools, ctk.CTkFrame):
         self.delete_selected()
 
     def paste_element(self) -> None:
-        try:
-            from PIL import ImageGrab
+        # The element copied here wins unless something was copied to the
+        # Windows clipboard since: any old screenshot there used to be pasted
+        # instead of the shape just copied.
+        grabbed = None
+        if not (self._element_clip and getattr(self, "_clip_seq", None) == _clipboard_seq()):
+            try:
+                from PIL import ImageGrab
 
-            grabbed = ImageGrab.grabclipboard()
-        except Exception:
-            grabbed = None
+                grabbed = ImageGrab.grabclipboard()
+            except Exception:
+                grabbed = None
         if isinstance(grabbed, Image.Image):
             path = model.assets_dir() / f"pasted_{kit.stamp()}.png"
             grabbed.save(path)
@@ -1988,10 +2004,20 @@ class DesignPage(DesignTools, ctk.CTkFrame):
         work_copy = model.clone(design)
         work_page = work_copy["pages"][self.index]
         selected = model.find(work_page, self.selected_id) if self.selected_id else None
+        started_path = self.path
+        before = json.dumps(design)
 
         def done(said, error):
             if error:
                 self.ai_reply.configure(text=error)
+                self._say("")
+                return
+            # Another design opened, or this one edited, while JARVIS worked:
+            # swapping its copy in wrote design A into B's file, or threw the
+            # new edits away. The answer is dropped instead.
+            if self.design is not design or self.path != started_path or json.dumps(self.design) != before:
+                self.ai_reply.configure(text="The design changed while I was working, so I left it as it is. "
+                                             "Ask again to apply the change.")
                 self._say("")
                 return
             self.undo_stack.append(snap)
@@ -2303,10 +2329,18 @@ class DesignPage(DesignTools, ctk.CTkFrame):
         brain = self.app.jarvis.brain
         work = model.clone(self.design)
         pages = None if all_pages else [self.index]
+        started, started_path = self.design, self.path
+        before = json.dumps(self.design)
 
         def done(count, error):
             if error:
                 self._say(error)
+                return
+            # As with AI edits: if the design changed meanwhile (a note typed,
+            # a slide deleted), notes written by page number would land on the
+            # wrong slides or undo the typing. Dropped instead.
+            if self.design is not started or self.path != started_path or json.dumps(self.design) != before:
+                self._say("The design changed while I was writing, so the notes weren't added. Ask again.")
                 return
             self.checkpoint()
             for i, page in enumerate(work["pages"]):

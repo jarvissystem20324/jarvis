@@ -96,7 +96,11 @@ class DocumentQA(Addon):
     @staticmethod
     def _read_text(path: Path) -> str:
         raw = path.read_bytes()
-        for encoding in ("utf-8", "utf-16", "cp1254", "latin-1"):
+        # UTF-16 only with its byte-order mark: tried blindly, any even-length
+        # Turkish (cp1254) file "decoded" into Chinese characters.
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return raw.decode("utf-16", "replace")
+        for encoding in ("utf-8-sig", "cp1254", "latin-1"):
             try:
                 return raw.decode(encoding)
             except UnicodeDecodeError:

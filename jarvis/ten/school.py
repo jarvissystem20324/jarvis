@@ -19,7 +19,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from .. import alerts, kit, reminders, security, shield
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Study"
 STUDY_LOG = kit.Store("study_log.json", [])
@@ -28,6 +28,35 @@ GRADES = kit.Store("grades.json", [])
 TIMETABLE = kit.Store("timetable.json", [])
 ASSIGNMENTS = kit.Store("assignments.json", [])
 EXAMS = kit.Store("exams.json", [])
+
+
+def _due(text: str, default_hour: int = 9) -> datetime | None:
+    """A moment from a date on its own: 'friday 23:59', '2026-12-20', '20.12.2026'.
+
+    life.parse_when finds a date at the end of a sentence ("essay friday") and
+    needs a space in front of it; given the bare date, it found nothing, so
+    every assignment was saved without a due date or a reminder.
+    """
+    from ..daily import parse_date
+    from ..life import parse_when
+
+    text = (text or "").strip()
+    if not text:
+        return None
+    moment, rest = parse_when(" " + text, default_hour=default_hour)
+    if moment is not None and not rest.strip():
+        return moment
+    try:
+        day = parse_date(text)
+    except ValueError:
+        return moment
+    return datetime(day.year, day.month, day.day, default_hour)
+
+
+def _hhmm(clock: str) -> str:
+    """'9.00' -> '09:00', so times sort and compare as times, not as text."""
+    hours, _, minutes = clock.replace(".", ":").partition(":")
+    return f"{int(hours):02d}:{minutes or '00'}" if hours.strip().isdigit() else clock
 FOCUS_APPS = kit.Store("focus_apps.json", {"apps": ["discord.exe", "steam.exe", "epicgameslauncher.exe",
                                                     "battle.net.exe", "riotclientservices.exe", "spotify.exe"]})
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -302,7 +331,9 @@ def plot(functions: list[str], x_min: float = -10, x_max: float = 10, size=(900,
         from sympy.parsing.sympy_parser import (convert_xor, implicit_multiplication_application, parse_expr,
                                                 standard_transformations)
 
-        expr_text = expr_text.replace("√", "sqrt").replace("π", "pi").strip()
+        from ..study import safe_maths
+
+        expr_text = safe_maths(expr_text.strip())
         expr = parse_expr(expr_text, local_dict={"ln": sympy.log, "e": sympy.E, "x": x},
                           transformations=standard_transformations + (implicit_multiplication_application, convert_xor))
         f = sympy.lambdify(x, expr, modules=["numpy"])
@@ -559,10 +590,10 @@ class School:
             m = re.match(r"(\w+)\s+(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+?)(?:\s*@\s*(.*))?$", rest.strip())
             if not m or m.group(1).lower() not in DAY_WORDS:
                 return "Usage: /timetable add mon 09:00-10:30 Maths @ B12"
-            rows.append({"day": DAY_WORDS[m.group(1).lower()], "start": m.group(2).replace(".", ":"),
-                         "end": m.group(3).replace(".", ":"), "subject": m.group(4).strip(),
+            rows.append({"day": DAY_WORDS[m.group(1).lower()], "start": _hhmm(m.group(2)),
+                         "end": _hhmm(m.group(3)), "subject": m.group(4).strip(),
                          "room": (m.group(5) or "").strip()})
-            rows.sort(key=lambda r: (r["day"], r["start"]))
+            rows.sort(key=lambda r: (r["day"], _hhmm(r["start"])))
             TIMETABLE.save(rows)
             return f"🗓 Added {m.group(4).strip()} on {DAYS[DAY_WORDS[m.group(1).lower()]].capitalize()}."
         if verb.lower() in {"clear"}:
@@ -574,13 +605,13 @@ class School:
             now = datetime.now()
             for offset in range(8):
                 day = (now.weekday() + offset) % 7
-                for r in rows:
-                    if r["day"] == day and (offset or r["start"] > now.strftime("%H:%M")):
+                for r in sorted(rows, key=lambda r: _hhmm(r["start"])):
+                    if r["day"] == day and (offset or _hhmm(r["start"]) > now.strftime("%H:%M")):
                         when = "today" if offset == 0 else "tomorrow" if offset == 1 else DAYS[day].capitalize()
                         return f"Next: {r['subject']} {when} at {r['start']}" + (f" in {r['room']}" if r["room"] else "")
         lines = ["🗓 Timetable:"]
         for d in range(7):
-            today = [r for r in rows if r["day"] == d]
+            today = sorted((r for r in rows if r["day"] == d), key=lambda r: _hhmm(r["start"]))
             if today:
                 lines.append(f"  {DAYS[d].capitalize()}: " + " · ".join(
                     f"{r['start']}-{r['end']} {r['subject']}" + (f" ({r['room']})" if r["room"] else "") for r in today))
@@ -593,14 +624,12 @@ class School:
                                               field("due", "text", "Due", hint="friday 23:59 or 2026-10-20")),
              template="add {title} | {subject} | {due}")
     def assignment_cmd(self, args: str, routed: bool = False):
-        from ..life import parse_when
-
         text = args.strip()
         rows = ASSIGNMENTS.load()
         verb, _, rest = text.partition(" ")
         if verb.lower() == "add":
             title, subject, due_text = split(rest, 3)
-            due, _ = parse_when(due_text, default_hour=23) if due_text else (None, "")
+            due = _due(due_text, default_hour=23)
             if not title:
                 return "Usage: /assignment add Essay | English | friday"
             rows.append({"title": title, "subject": subject, "due": due.timestamp() if due else 0, "done": False})
@@ -609,7 +638,8 @@ class School:
                 reminders.board.add("reminder", f"Due tomorrow: {title}", due.timestamp() - 86400)
             return f"📚 Added {title}" + (f", due {due:%a %d %b %H:%M}" if due else "") + "."
         if verb.lower() == "done" and rest.strip().isdigit():
-            open_rows = [r for r in rows if not r.get("done")]
+            # Numbered as the list shows them: soonest due first.
+            open_rows = sorted((r for r in rows if not r.get("done")), key=lambda r: r.get("due") or 9e12)
             index = int(rest) - 1
             if 0 <= index < len(open_rows):
                 open_rows[index]["done"] = True
@@ -635,28 +665,28 @@ class School:
         rows = EXAMS.load()
         verb, _, rest = text.partition(" ")
         if verb.lower() == "add":
-            name, when = split(rest, 2)
-            try:
-                day = date.fromisoformat(when.strip())
-            except ValueError:
-                from ..life import parse_when
-
-                moment, _ = parse_when(when)
-                if moment is None:
-                    return "Usage: /exam add YKS | 2027-06-19"
-                day = moment.date()
-            rows.append({"name": name, "date": day.isoformat()})
+            name, when = split_free(rest, 2)
+            moment = _due(when)
+            if not name.strip() or moment is None:
+                return "Usage: /exam add YKS | 2027-06-19   (or 19.06.2027, or friday)"
+            rows.append({"name": name, "date": moment.date().isoformat()})
             rows.sort(key=lambda r: r["date"])
             EXAMS.save(rows)
-        elif verb.lower() in {"delete", "remove"} and rest.strip().isdigit():
-            index = int(rest) - 1
-            if 0 <= index < len(rows):
-                rows.pop(index)
-                EXAMS.save(rows)
         upcoming = [r for r in rows if date.fromisoformat(r["date"]) >= date.today()]
+        said = ""
+        if verb.lower() in {"delete", "remove"} and rest.strip().isdigit():
+            # The number from the list shown, which hides past exams.
+            index = int(rest) - 1
+            if 0 <= index < len(upcoming):
+                gone = upcoming.pop(index)
+                rows.remove(gone)
+                EXAMS.save(rows)
+                said = f"🗑 Deleted {gone['name']}.\n"
+            else:
+                said = f"There's no exam {rest.strip()} in the list.\n"
         if not upcoming:
-            return "No exams coming up. /exam add YKS | 2027-06-19"
-        return "⏳ Exams:\n" + "\n".join(
+            return said + "No exams coming up. /exam add YKS | 2027-06-19"
+        return said + "⏳ Exams:\n" + "\n".join(
             f"  {i}. {r['name']}: {(date.fromisoformat(r['date']) - date.today()).days} day(s) "
             f"({date.fromisoformat(r['date']):%d %b %Y})" for i, r in enumerate(upcoming, 1))
 
@@ -704,7 +734,7 @@ class School:
              fields=(field("functions", "text", "y = … (separate several with ;)", "y = x^2 - 3x"),
                      field("range", "text", "x from, to", "-10, 10")))
     def plot_cmd(self, args: str, routed: bool = False):
-        functions, span = split(args, 2)
+        functions, span = split_free(args, 2)
         if not functions:
             return "Usage: /plot y = x^2 - 3x ; y = sin(x) | -10, 10"
         try:

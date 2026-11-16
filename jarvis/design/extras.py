@@ -133,7 +133,13 @@ def read_table(path: Path, limit: int = 400) -> list[list[str]]:
         finally:
             book.close()
     elif suffix in {".csv", ".tsv", ".txt"}:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        raw = path.read_bytes()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            # Turkish Excel saves "CSV" as cp1254: read as UTF-8 it put
+            # "�stanbul" on the slides.
+            text = raw.decode("cp1254", errors="replace")
         first = text.splitlines()[0] if text.strip() else ""
         delimiter = "\t" if "\t" in first else (";" if first.count(";") > first.count(",") else ",")
         rows = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), delimiter=delimiter)][:limit + 1]

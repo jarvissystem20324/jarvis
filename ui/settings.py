@@ -27,7 +27,7 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("GROQ_API_KEY", "Groq", "console.groq.com/keys", True),
     ("INCEPTION_API_KEY", "Inception Mercury", "platform.inceptionlabs.ai", True),
     ("NVIDIA_API_KEY", "NVIDIA NIM", "build.nvidia.com", True),
-    ("MISTRAL_API_KEY", "Mistral", "console.mistral.ai/api-keys", True),
+    ("MISTRAL_API_KEY", "Mistral  (paid)", "console.mistral.ai/api-keys", False),
     ("CLOUDFLARE_API_TOKEN", "Cloudflare Workers AI", "dash.cloudflare.com/profile/api-tokens", True),
     ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "dash.cloudflare.com (right sidebar)", True),
     ("OPENROUTER_API_KEY", "OpenRouter", "openrouter.ai/keys", True),
@@ -48,7 +48,7 @@ def read_env() -> dict[str, str]:
     if not path.exists():
         return values
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             if line.lstrip().startswith("#"):
                 continue
             match = _SETTING.match(line)
@@ -62,7 +62,7 @@ def read_env() -> dict[str, str]:
 def write_env(updates: dict[str, str]) -> None:
     """Set these keys in .env, leaving every other line untouched."""
     path = get_base_dir() / ".env"
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
 
     remaining = dict(updates)
     for index, line in enumerate(lines):
@@ -81,7 +81,8 @@ class SettingsWindow(ctk.CTkToplevel):
         super().__init__(parent)
         self.colors = colors
         self.title("JARVIS settings")
-        self.geometry("660x680")
+        # Fits a 1366×768 screen: at 680 high, Save sat under the taskbar.
+        self.geometry(f"660x{min(680, self.winfo_screenheight() - 140)}")
         self.configure(fg_color=colors["bg"])
         self.transient(parent)
 
@@ -121,6 +122,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._add_assistant_section(body)
         self._add_appearance_section(body)
         self._add_ten_section(body)
+        self._shown_at_open = {name: widget.get() for name, (widget, _code) in self.choices.items()}
         self._rows = [(child, self._words(child), child.pack_info()) for child in body.winfo_children()]
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -603,8 +605,14 @@ class SettingsWindow(ctk.CTkToplevel):
             for name, entry in self.entries.items()
             if entry.get().strip() != self.original.get(name, "")
         }
+        shown_at_open = getattr(self, "_shown_at_open", {})
         for name, (widget, to_code) in self.choices.items():
             shown = widget.get()
+            # Only a menu the user changed: a setting missing from .env shows
+            # its default, and comparing that with "" wrote 15 untouched
+            # defaults into .env on every Save.
+            if name in shown_at_open and shown == shown_at_open[name]:
+                continue
             value = to_code.get(shown, shown) if to_code else shown
             if value != self.original.get(name, ""):
                 updates[name] = value
@@ -636,6 +644,7 @@ class SettingsWindow(ctk.CTkToplevel):
         except AttributeError:
             pass
         self.original = read_env()
+        self._shown_at_open = {name: widget.get() for name, (widget, _code) in self.choices.items()}
 
         for name, state in self.status.items():
             if name not in self.entries:

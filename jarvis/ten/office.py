@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 from .. import kit, security, shield
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Documents"
 PDF_TYPES = (("PDF", "*.pdf"),)
@@ -396,7 +396,11 @@ def read_table(path: Path, sheet: str = "", limit: int = 100000) -> tuple[list[s
     if path.suffix.lower() == ".csv":
         raw = path.read_bytes()
         text = raw.decode("utf-8-sig", "replace")
-        dialect = csv.Sniffer().sniff(text[:4000], delimiters=",;\t") if text.strip() else csv.excel
+        try:
+            dialect = csv.Sniffer().sniff(text[:4000], delimiters=",;\t") if text.strip() else csv.excel
+        except csv.Error:
+            # One column has no delimiter to find ("Could not determine delimiter").
+            dialect = csv.excel
         rows = [r for r in csv.reader(io.StringIO(text), dialect)]
         rows = [[_cell(c) for c in r] for r in rows if any(str(c).strip() for c in r)][:limit + 1]
         return [str(h) for h in (rows[0] if rows else [])], rows[1:], path.stem

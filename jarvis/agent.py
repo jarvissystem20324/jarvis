@@ -390,6 +390,42 @@ class Agent:
             return "Nothing was changed, so the work branch was removed."
 
         relative = [str(path.relative_to(self.root)) for path, _backup in self.written]
+        # A gitignored file (.env, local.cfg) can't go into the commit, so it
+        # stayed changed on your branch, and its backup was then deleted: the
+        # original was gone while the report said "unchanged". Put each one
+        # back as it was and say so.
+        kept_out: list[str] = []
+        # Forward slashes in and quoting off: git quotes a backslash path
+        # ("conf\\secret.ini") and non-ASCII names in its output, so a file in
+        # a subfolder never matched and kept its change with its backup deleted.
+        posix = [path.relative_to(self.root).as_posix() for path, _backup in self.written]
+        code, out = self._git("-c", "core.quotePath=false", "check-ignore", "--", *posix)
+        ignored = {line.strip() for line in out.splitlines() if line.strip()} if code == 0 else set()
+        if ignored:
+            import shutil
+
+            still = []
+            for path, backup in self.written:
+                rel = path.relative_to(self.root).as_posix()
+                if rel not in ignored:
+                    still.append((path, backup))
+                    continue
+                try:
+                    if backup is not None:
+                        shutil.copy2(backup, path)
+                        backup.unlink()
+                    else:
+                        path.unlink(missing_ok=True)
+                    kept_out.append(rel)
+                except OSError:
+                    still.append((path, backup))
+            self.written = still
+            relative = [str(path.relative_to(self.root)) for path, _backup in self.written]
+            if not self.written:
+                self._git("switch", original)
+                self._git("branch", "-D", name)
+                return ("Every change was to a file git ignores (" + ", ".join(kept_out) + "), which can't go on a "
+                        "branch, so each was put back as it was and the branch removed.")
         self._git("add", "--", *relative)
 
         leaks = vcs._secret_check(self.root)
@@ -423,9 +459,11 @@ class Agent:
                     pass
         self.written = []
         self.last_branch = (original, name)
+        skipped = (f"Not on the branch, because git ignores them; put back as they were: {', '.join(kept_out)}\n"
+                   if kept_out else "")
         return (
             f"The work is on branch {name} ({len(relative)} file(s), one commit).\n"
-            f"You are back on {original}, unchanged.\n"
+            f"You are back on {original}, unchanged.\n" + skipped +
             f"  Review:  /git diff {original}..{name}\n"
             f"  Keep:    git merge {name}\n"
             f"  Discard: /undo"
@@ -518,9 +556,18 @@ class Agent:
         )
         addon = self._code_addon()
         blocks = addon._blocks(answer) if addon else []
-        body = next((b for p, b in blocks if p == step.target), None)
-        if body is None and blocks:
-            body = blocks[-1][1]      # only one block, wrong label
+
+        def same(label: str) -> bool:
+            # "src\calc.py", "./src/calc.py" and "src/calc.py" are one file.
+            def norm(p: str) -> str:
+                return p.strip().replace("\\", "/").removeprefix("./").lower()
+            return norm(label) == norm(step.target)
+
+        body = next((b for p, b in blocks if same(p)), None)
+        if body is None and len(blocks) == 1:
+            body = blocks[0][1]       # only one block, wrong label
+        # Several blocks and none for this file: writing the last one put
+        # another file's contents here.
         if body is None:
             raise AgentError(
                 f"I couldn't produce new contents for {step.target}. "

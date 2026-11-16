@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 
 from .. import kit, security, shield
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Coding"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -282,8 +282,11 @@ def curl_to_python(command: str) -> str:
 
 
 def _pyrepr(value, indent: int = 0) -> str:
-    return json.dumps(value, indent=4, ensure_ascii=False).replace("true", "True").replace("false", "False") \
-        .replace("null", "None")
+    # Python's own repr, not JSON with words swapped: replacing "true"/"null"
+    # in the text also rewrote keys and strings ("nullable" -> "Noneable").
+    import pprint
+
+    return pprint.pformat(value, indent=1, width=100, sort_dicts=False)
 
 
 # --- JSON to types -------------------------------------------------------------------
@@ -675,7 +678,7 @@ class Coding:
              fields=(field("file", "file", "File"), field("stdin", "long", "Input for the program", optional=True)),
              keywords="execute node javascript java c++ go")
     def runcode_cmd(self, args: str, routed: bool = False):
-        path_text, stdin = split(args, 2)
+        path_text, stdin = split_free(args, 2)
         path = kit.path_arg(path_text)
         if path is None or not path.is_file():
             return "Usage: /runcode <file>"
@@ -927,7 +930,10 @@ class Coding:
              title="GitHub repo info", icon="🐙", page="code",
              fields=(field("repo", "text", "owner/repo or link", "python/cpython"),))
     def github_cmd(self, args: str, routed: bool = False):
-        m = re.search(r"(?:github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", args.strip())
+        text = args.strip()
+        # A link may go deeper (".../issues/123"): the repo is the first two parts.
+        m = (re.search(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/?#]|$)", text) if "github.com" in text
+             else re.fullmatch(r"([\w.-]+)/([\w.-]+?)(?:\.git)?/?", text))
         if not m:
             return "Usage: /github owner/repo"
         owner, repo = m.group(1), m.group(2)
@@ -1083,6 +1089,8 @@ class Coding:
                                                                                        "open project)", optional=True),))
     def vscode_cmd(self, args: str, routed: bool = False):
         target = args.strip().strip('"')
+        if target.startswith("-"):
+            return "That looks like an option, not a folder or file. /vscode <folder or file>"
         if not target:
             try:
                 target = str(project_root(self))
@@ -1097,6 +1105,14 @@ class Coding:
                     break
         if not code_cli:
             return "VS Code isn't installed (or `code` isn't on PATH). Get it from code.visualstudio.com."
+        # code.cmd is a batch file: cmd.exe reads "&" in a folder name ("R&D")
+        # as "then run…", which Python can't escape. Code.exe, beside its bin
+        # folder, takes the path as plain text.
+        exe = Path(code_cli).resolve().parent.parent / "Code.exe"
+        if exe.is_file():
+            code_cli = str(exe)
+        elif re.search(r'[&|<>^%"]', target):
+            return "VS Code can only be started through its batch file here, which can't take & | < > ^ % in a path."
         try:
             subprocess.Popen([code_cli, target], creationflags=NO_WINDOW)
         except OSError as exc:

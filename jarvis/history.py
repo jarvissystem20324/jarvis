@@ -129,6 +129,19 @@ def rename_chat(old: str, new: str) -> str:
     return ""
 
 
+def chat_exists(name: str) -> bool:
+    """Is there a saved conversation with this name (or one that shares its file)?"""
+    return (_chats_dir() / f"{_slug(name)}.json").exists()
+
+
+def free_name(name: str) -> str:
+    """`name`, or `name 2`, `name 3`… — whichever has no saved conversation yet."""
+    candidate, number = name, 2
+    while chat_exists(candidate):
+        candidate, number = f"{name} {number}", number + 1
+    return candidate
+
+
 def delete_chat(name: str) -> bool:
     path = _chats_dir() / f"{_slug(name)}.json"
     if not path.exists():

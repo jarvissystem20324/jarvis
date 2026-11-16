@@ -8,6 +8,7 @@ error and losing the conversation.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Callable
 
@@ -398,7 +399,10 @@ class Brain:
                 problems.append(f"{provider.label}: {self._short(exc)}")
                 continue
             except NotFoundError:
-                if is_preferred:
+                # A missing vision (or overridden) model says nothing about the
+                # provider's chat model: retiring the provider over it left
+                # Max mode without NVIDIA for the session after one /see.
+                if is_preferred or model != providers.model_for(provider):
                     # Only this mode's preferred model is missing; the provider
                     # itself is fine and still serves its own default.
                     problems.append(
@@ -575,19 +579,22 @@ class Brain:
             # client retries twice, so a model that simply never answers burns
             # three full timeouts — Hyperdrive's 200s budget became 600s.
             client = client.with_options(timeout=timeout, max_retries=0)
+        base = kwargs
         try:
             response = client.chat.completions.create(**kwargs)
         except (APIStatusError, APIError, TypeError) as exc:
             retry = dict(kwargs)
             changed = False
             if self._mentions(exc, "max_tokens", "max_completion_tokens"):
-                retry.pop(token_param, None)
+                budget = retry.pop(token_param, None) or max(self.mode.max_tokens, self.min_tokens)
                 token_param = (
                     "max_tokens"
                     if token_param == "max_completion_tokens"
                     else "max_completion_tokens"
                 )
-                retry[token_param] = 2048
+                # The same budget under the other name: a fixed 2048 cut Max
+                # mode's decks and CVs short.
+                retry[token_param] = budget
                 self._token_param[provider.name] = token_param
                 changed = True
             if self._mentions(exc, "temperature"):
@@ -602,6 +609,7 @@ class Brain:
             if not changed:
                 raise
             response = client.chat.completions.create(**retry)
+            base = retry
 
         # Nothing has been sent to the caller yet, so a retry above could not
         # have left half an answer on screen.
@@ -612,7 +620,11 @@ class Brain:
 
         # The model spent its entire budget thinking. Nothing was emitted, so
         # asking again with more room is safe and is usually all it needs.
-        roomier = dict(kwargs)
+        # From what was last accepted: rebuilding from the first request put
+        # back the very parameter the provider had just refused.
+        roomier = dict(base)
+        if on_chunk is None:
+            roomier.pop("stream", None)
         roomier[token_param] = max(self.mode.max_tokens * 3, 3072, self.min_tokens)
         try:
             return self._read_reply(
@@ -705,11 +717,23 @@ class Brain:
 
     @staticmethod
     def _is_out_of_credit(exc: Exception) -> bool:
-        """Tell an exhausted balance apart from ordinary throttling."""
+        """Tell an exhausted balance apart from ordinary throttling.
+
+        Free tiers word their per-minute limits like billing problems:
+        Gemini says "exceeded your current quota, please check your plan and
+        billing details… retry in 41s", Groq links to its billing page. Read
+        as "out of credit", they retired the two best free providers for the
+        session and pushed it onto paid ones. A wait time or a per-minute
+        limit means throttling.
+        """
         text = str(getattr(exc, "message", None) or exc).lower()
+        if re.search(r"retry\s+(?:in|after)|try\s+again\s+in|per\s+minute|per\s+day|\b[rt]pm\b|\b[rt]pd\b|"
+                     r"rate\s+limit|requests?\s+per", text):
+            return False
         return any(
             marker in text
-            for marker in ("insufficient_quota", "billing", "credit", "exceeded your current quota")
+            for marker in ("insufficient_quota", "credit balance", "out of credit", "no credits",
+                           "insufficient credit", "insufficient balance", "payment required")
         )
 
     # --- visibility -------------------------------------------------------
@@ -769,11 +793,13 @@ class Brain:
     def _short(exc: Exception) -> str:
         text = str(getattr(exc, "message", None) or exc).strip()
         low = text.lower()
-        if "insufficient_quota" in low or "credit" in low or "billing" in low:
+        # The same judgement as _is_out_of_credit: Gemini's per-minute limit
+        # mentions "billing" and was shown as "out of credit".
+        if Brain._is_out_of_credit(exc):
             return "out of credit"
         if "api key" in low or "unauthorized" in low or "invalid_api_key" in low:
             return "key rejected"
-        if "rate" in low and "limit" in low:
+        if ("rate" in low and "limit" in low) or "quota" in low or "retry in" in low:
             return "rate limited"
         if "has not been priced" in low or "model_price_error" in low:
             # Blueminds' wording for a model it lists but has not switched on.

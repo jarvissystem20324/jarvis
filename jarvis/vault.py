@@ -122,11 +122,19 @@ def read_bytes(path: Path) -> bytes:
 
 def write_bytes(path: Path, data: bytes) -> None:
     """Write, sealed when encryption is on. Replaces the file atomically."""
+    import os
+    import threading
+
     path = Path(path)
     payload = MAGIC + protect(data) if enabled() else data
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_bytes(payload)
-    temp.replace(path)
+    # A temp name of its own per writer: two threads saving the same file
+    # through one "x.tmp" collided on Windows (WinError 32).
+    temp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temp.write_bytes(payload)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def read_text(path: Path) -> str:

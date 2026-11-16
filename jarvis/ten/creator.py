@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import creator, kit, shield
-from ..registry import command, field, split
+from ..registry import command, field, split, split_free
 
 G = "Media"
 PLATFORMS = ("YouTube", "TikTok", "Instagram", "X", "LinkedIn")
@@ -24,7 +24,7 @@ class Creator:
              page="creator", fields=(field("niche", "text", "Your niche or channel", hint="budget travel in Türkiye"),
                                      field("platform", "choice", "Platform", "YouTube", PLATFORMS)))
     def videoideas_cmd(self, args: str, routed: bool = False):
-        niche, platform = split(args, 2)
+        niche, platform = split_free(args, 2)     # "budget travel in Turkey" is one niche
         if not niche.strip():
             return "Usage: /videoideas home coffee for beginners | YouTube"
         real = creator.keyword_ideas(niche.strip())[:15]
