@@ -96,6 +96,35 @@ def encode(image, max_width: int = MAX_SHOT_WIDTH) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def copy_image(image) -> None:  # pragma: no cover - the real clipboard
+    """Put a picture on the Windows clipboard (as a DIB), with no extra package."""
+    import ctypes
+    from ctypes import wintypes
+
+    if sys.platform != "win32":
+        raise ScreenError("Copying pictures works on Windows only.")
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, "BMP")
+    data = buffer.getvalue()[14:]          # a DIB is a BMP without its file header
+    kernel32, user32 = ctypes.windll.kernel32, ctypes.windll.user32
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    handle = kernel32.GlobalAlloc(0x0002, len(data))          # GMEM_MOVEABLE
+    pointer = kernel32.GlobalLock(handle)
+    ctypes.memmove(pointer, data, len(data))
+    kernel32.GlobalUnlock(handle)
+    if not user32.OpenClipboard(None):
+        raise ScreenError("Another program is using the clipboard. Try again.")
+    try:
+        user32.EmptyClipboard()
+        if not user32.SetClipboardData(8, handle):            # CF_DIB
+            raise ScreenError("Windows refused the picture.")
+    finally:
+        user32.CloseClipboard()
+
+
 # --- hands ----------------------------------------------------------------------
 
 class Hands:

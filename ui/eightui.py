@@ -37,7 +37,7 @@ TOUR = [
      "and prices. Try: “what's on my list”."),
     ("Your PC and safety", "Live PC graphs, cleanup and winget installs; a security score, who's on your Wi-Fi and\n"
      "antivirus scans on Windows Defender. Secrets go in hidden boxes, never the chat."),
-    ("Talk to me", "Press 🎧 Hands-free and just talk; say “stop listening” to end. Hold Ctrl+Alt+V to talk\n"
+    ("Talk to me", "Press  Hands-free and just talk; say “stop listening” to end. Hold Ctrl+Alt+V to talk\n"
      "from any app. /help lists everything. This tour: /tour."),
 ]
 
@@ -423,22 +423,68 @@ class EightUI:
                                  is_user=False, record=False)
 
         def copy():
+            # Bounty update: through Windows itself — pywin32 was never one of JARVIS's packages.
             try:
-                import io
+                from jarvis import screen
 
-                import win32clipboard
-
-                buffer = io.BytesIO()
-                render().save(buffer, "BMP")
-                win32clipboard.OpenClipboard()
-                try:
-                    win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32clipboard.CF_DIB, buffer.getvalue()[14:])
-                finally:
-                    win32clipboard.CloseClipboard()
+                screen.copy_image(render())
                 copy_button.configure(text="✓ Copied")
             except Exception as exc:
                 copy_button.configure(text=f"Copy failed: {exc}"[:30])
+
+        # Bounty update: smart screenshots — read the text, explain it, or ask about it.
+        answer_box = ctk.CTkTextbox(window, height=130, wrap="word", fg_color=colors["panel"],
+                                    text_color=colors["text"])
+
+        def show_answer(text: str) -> None:
+            if not answer_box.winfo_ismapped():
+                answer_box.pack(fill="x", padx=10, pady=(0, 10))
+            answer_box.configure(state="normal")
+            answer_box.delete("1.0", "end")
+            answer_box.insert("1.0", text)
+
+        def in_background(work, waiting: str) -> None:
+            show_answer(waiting)
+
+            def run():
+                try:
+                    result = work()
+                except Exception as exc:
+                    result = f"Something went wrong: {exc}"
+                try:
+                    window.after(0, lambda: show_answer(result))
+                except Exception:
+                    pass
+
+            threading.Thread(target=run, daemon=True).start()
+
+        def read_text():
+            from jarvis import ocr
+
+            def work():
+                if not ocr.available():
+                    return "Reading text needs Windows' built-in OCR, which isn't available on this PC."
+                text = ocr.read_image_from(render()).strip()
+                return text or "I couldn't find any text in this screenshot."
+
+            in_background(work, "Reading the text…")
+
+        def explain(question: str = ""):
+            from jarvis import screen, security
+
+            if not security.permissions.ask(security.READ_SCREEN, "this screenshot", context="Smart screenshot"):
+                return
+            image_b64 = screen.encode(render())
+            prompt = question or ("Explain what this screenshot shows. If it is an error, say what caused it and how "
+                                  "to fix it. If it is text, a chart or a form, say what matters in it. Be brief.")
+            in_background(lambda: self.jarvis.brain.ask_once(prompt, image_b64=image_b64), "Looking at it…")
+
+        def ask():
+            self._ask_value("Ask about this screenshot:", False, lambda q: q and explain(q))
+
+        ctk.CTkButton(bar, text="🔤 Read text", width=0, height=28, command=read_text).pack(side="left", padx=(12, 3))
+        ctk.CTkButton(bar, text="💡 Explain", width=0, height=28, command=explain).pack(side="left", padx=3)
+        ctk.CTkButton(bar, text="❓ Ask", width=0, height=28, command=ask).pack(side="left", padx=3)
 
         def undo():
             if ops:

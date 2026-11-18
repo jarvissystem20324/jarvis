@@ -67,6 +67,36 @@ class ImageGenerationError(RuntimeError):
     """Raised when an image could not be produced."""
 
 
+MAX_UPSCALED_SIDE = 8192
+
+
+def upscale(path: Path, factor: int = 2) -> Path:
+    """Image Studio 2.0: a bigger copy of a picture, made on this PC.
+
+    Lanczos resampling with a light unsharp mask — not an AI upscaler, so it
+    adds no detail that wasn't there, but edges stay clean and nothing is
+    uploaded. The original is never changed; the result is a new file.
+    """
+    from PIL import Image, ImageFilter
+
+    factor = max(2, min(4, int(factor)))
+    with Image.open(path) as source:
+        image = source.convert("RGBA" if source.mode in {"RGBA", "LA", "P"} else "RGB")
+    width, height = image.width * factor, image.height * factor
+    if max(width, height) > MAX_UPSCALED_SIDE:
+        ratio = MAX_UPSCALED_SIDE / max(width, height)
+        width, height = int(width * ratio), int(height * ratio)
+    bigger = image.resize((width, height), Image.LANCZOS)
+    bigger = bigger.filter(ImageFilter.UnsharpMask(radius=1.6, percent=60, threshold=2))
+    target = path.with_name(f"{path.stem}_x{factor}.png")
+    n = 2
+    while target.exists():
+        target = path.with_name(f"{path.stem}_x{factor}-{n}.png")
+        n += 1
+    bigger.save(target)
+    return target
+
+
 class ImageGenerator:
     def __init__(self, model: str | None = None):
         self.model = model or get_image_model()

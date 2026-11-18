@@ -25,10 +25,11 @@ from .work import Work
 from .design10 import Design10
 from .cowork10 import CoworkCommands
 from .learn import Learn
+from .bounty import Bounty
 
 
 class Ten(Office, School, Coding, System, Shield10, Automate, AIHelp, Media, Creator, Play, Lifestyle, Travel10, Phone,
-          Work, Design10, CoworkCommands, Learn):
+          Work, Design10, CoworkCommands, Learn, Bounty):
     pass
 
 
@@ -44,8 +45,10 @@ def start(jarvis) -> None:
         return
     _started = True
     from . import school
+    from .. import nudges
 
-    for module in (system_mod(), shield_mod(), automate_mod(), lifestyle_mod(), work_mod(), phone_mod(), school):
+    for module in (system_mod(), shield_mod(), automate_mod(), lifestyle_mod(), work_mod(), phone_mod(), school,
+                   nudges):
         hook = getattr(module, "register_watchers", None)
         if hook is not None:
             try:

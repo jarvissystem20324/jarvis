@@ -135,6 +135,8 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_PHONE_LINK", "off")
     monkeypatch.setenv("JARVIS_SELECT_HOTKEY", "off")
     monkeypatch.setenv("JARVIS_PTT_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_SCREENSHOT_HOTKEY", "off")
+    monkeypatch.setenv("JARVIS_NUDGES", "off")
     monkeypatch.setenv("JARVIS_START_PAGE", "chat")
     monkeypatch.setenv("JARVIS_ORB", "off")
 

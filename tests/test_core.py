@@ -376,7 +376,7 @@ def addons(base):
 
 def test_every_bundled_addon_loads(addons):
     assert not addons.errors
-    assert len(addons.loaded) == 9   # 8.0 added the text expander
+    assert len(addons.loaded) == 13   # 8.0 added the text expander; 14.0 hn, apod, launches, standup
 
 
 def test_the_team_is_known(addons):

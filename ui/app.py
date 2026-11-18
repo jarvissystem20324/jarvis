@@ -148,7 +148,6 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self._show_tab("chat")
         # Cowork jobs report from their own threads; every update comes back here.
         cowork.manager.subscribe(lambda job: safe_after(self, lambda j=job: self._cowork_update(j)))
-
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
@@ -1253,7 +1252,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
 
         body = ctk.CTkFrame(self.image_frame, fg_color=COLORS["panel"])
         body.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        body.grid_rowconfigure(2, weight=1)
+        body.grid_rowconfigure(3, weight=1)
         body.grid_columnconfigure(0, weight=1)
 
         self.image_prompt = ctk.CTkTextbox(
@@ -1300,15 +1299,40 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         )
         self.generate_btn.pack(side="right")
 
+        # Bounty update: Image Studio 2.0 — pick the engine, a style, upscale, variations.
+        from jarvis.ten.aihelp import IMAGE_STYLES
+
+        studio = ctk.CTkFrame(body, fg_color="transparent")
+        studio.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._engines = {"Auto (best free)": "auto", "Cloudflare FLUX": "cloudflare", "NVIDIA FLUX": "nvidia",
+                         "Pollinations": "pollinations", "OpenAI (paid)": "openai"}
+        ctk.CTkLabel(studio, text="Engine:", text_color=COLORS["text"]).pack(side="left", padx=(0, 8))
+        self.engine_menu = ctk.CTkOptionMenu(studio, values=list(self._engines), width=160,
+                                             command=self._set_image_engine)
+        from jarvis.config import get_image_provider
+
+        current = get_image_provider()
+        self.engine_menu.set(next((k for k, v in self._engines.items() if v == current), "Auto (best free)"))
+        self.engine_menu.pack(side="left", padx=(0, 16))
+        ctk.CTkLabel(studio, text="Style:", text_color=COLORS["text"]).pack(side="left", padx=(0, 8))
+        self._styles = {"None": "", **{name.title(): text for name, text in IMAGE_STYLES.items()}}
+        self.style_menu = ctk.CTkOptionMenu(studio, values=list(self._styles), width=130)
+        self.style_menu.set("None")
+        self.style_menu.pack(side="left", padx=(0, 16))
+        for text, command in (("Upscale 2×", lambda: self._upscale(2)), ("Upscale 4×", lambda: self._upscale(4)),
+                              ("Variations", lambda: self.run_in_chat("/vary 3"))):
+            ctk.CTkButton(studio, text=text, width=96, height=30, fg_color="transparent", border_width=1,
+                          command=command).pack(side="left", padx=3)
+
         self.preview_label = ctk.CTkLabel(
             body,
             text="Generated image will appear here",
             text_color="#64748b",
         )
-        self.preview_label.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
+        self.preview_label.grid(row=3, column=0, sticky="nsew", padx=16, pady=8)
 
         footer = ctk.CTkFrame(body, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
+        footer.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
 
         ctk.CTkButton(
             footer,
@@ -1339,8 +1363,42 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             body, fg_color=COLORS["bg"], height=130,
             label_text="Earlier images", label_text_color=COLORS["muted"],
         )
-        self.gallery.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.gallery.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 14))
         self.after(600, self._load_gallery)
+
+    def _set_image_engine(self, label: str) -> None:
+        self.jarvis._write_setting("JARVIS_IMAGE_PROVIDER", self._engines.get(label, "auto"))
+
+    def _upscale(self, factor: int) -> None:
+        """Upscale the current picture on this PC (Lanczos plus a light sharpen); nothing is uploaded."""
+        source = self.current_image
+        if source is None or not Path(source).exists():
+            self.status_label.configure(text="Generate or open a picture first.")
+            return
+
+        def work():
+            from jarvis import images
+
+            return images.upscale(Path(source), factor)
+
+        def done(path):
+            self.current_image = path
+            self._show_image_preview(path)
+            self._load_gallery()
+            self.status_label.configure(text=f"Upscaled {factor}× → {path.name}")
+
+        def failed(message):
+            self.status_label.configure(text=f"Upscale failed: {message}"[:90])
+
+        def run():
+            try:
+                path = work()
+                safe_after(self, lambda: done(path))
+            except Exception as exc:
+                safe_after(self, lambda m=str(exc): failed(m))
+
+        self.status_label.configure(text=f"Upscaling {factor}×…")
+        threading.Thread(target=run, daemon=True).start()
 
     def _configure_tags(self) -> None:
         """Define every text tag. CTkTextbox wraps a tk.Text underneath."""
@@ -2688,6 +2746,9 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         if not prompt:
             self.status_label.configure(text="Enter a prompt first.")
             return
+        style = getattr(self, "_styles", {}).get(self.style_menu.get(), "") if hasattr(self, "style_menu") else ""
+        if style:
+            prompt = f"{prompt}, {style}"
 
         size = SIZES[self.size_menu.get()]
         quality = self.quality_menu.get().lower()

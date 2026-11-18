@@ -122,6 +122,9 @@ def start(app) -> None:
 
     app._select_hotkey = listen(41, get_setting("JARVIS_SELECT_HOTKEY", "ctrl+alt+r"), selection)
     app._ptt_hotkey = listen(42, get_setting("JARVIS_PTT_HOTKEY", "ctrl+alt+v"), talk)
+    # Bounty update: a smart screenshot from any app.
+    app._shot_hotkey = listen(43, get_setting("JARVIS_SCREENSHOT_HOTKEY", "ctrl+alt+s"),
+                              lambda _vk: safe_after(app, app._snip))
 
 
 class SelectionAssistant(ctk.CTkToplevel):
