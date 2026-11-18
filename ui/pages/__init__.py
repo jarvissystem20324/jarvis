@@ -18,17 +18,20 @@ class PageInfo:
     section: str
     target: str = ""          # "module:Class"; empty for the window's built-in tabs
     keywords: str = ""
+    # 13.4.2: Chat and Code are the switch at the top of the window, not
+    # sidebar entries. They are still pages: links and commands open them.
+    nav: bool = True
 
 
 SECTIONS = ("Main", "Work", "PC", "Media and fun", "Life", "Me")
 
 PAGES: tuple[PageInfo, ...] = (
     PageInfo("home", "🏠", "Home", "Main", "ui.pages.home:HomePage", "dashboard widgets start"),
-    PageInfo("chat", "💬", "Chat", "Main", "", "talk ask conversation"),
+    PageInfo("chat", "💬", "Chat", "Main", "", "talk ask conversation", nav=False),
     PageInfo("tools", "🧰", "Tools", "Main", "ui.pages.tools:ToolsPage", "every command all tools"),
     PageInfo("image", "🎨", "Image Gen", "Main", "", "picture generate"),
     PageInfo("design", "🖌", "Design", "Main", "", "slides poster logo"),
-    PageInfo("code", "⌨", "Coding", "Main", "ui.pages.coding:CodingPage", "ide editor code project"),
+    PageInfo("code", "⌨", "Coding", "Main", "ui.pages.coding:CodingPage", "ide editor code project", nav=False),
     PageInfo("documents", "📄", "Documents", "Work", "ui.pages.documents:DocumentsPage", "pdf word excel office"),
     PageInfo("study", "🎓", "Study", "Work", "ui.pages.study:StudyPage", "school exam homework"),
     PageInfo("today", "✅", "Today", "Work", "ui.pages.productivity:TodayPage", "tasks goals plan"),

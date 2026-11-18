@@ -32,6 +32,8 @@ class DocumentsPage(Hub):
         self._signature()
         self.tools("pdfcompress", "pdf2word", "pdfnumber", "pdfwatermark", "pdfform", "pdfrotate", "pdfpages",
                    "pdfmerge", "pdfsplit")
+        self.section("Ask a folder of documents")
+        self.tools("askdocs")
         self.section("Excel")
         self.tools("excel", "exceledit", "formula", "xlchart", "data")
         self.section("Word and writing")

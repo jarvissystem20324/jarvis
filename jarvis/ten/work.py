@@ -393,13 +393,33 @@ class Work:
             text += "\n\n" + reflection.strip()
         return text
 
-    @command("meeting", "minutes", group=G, usage="/meeting <notes or transcript, or a file>",
-             help="meeting notes: summary, decisions and action items", title="Meeting notes", icon="🧑\u200d🤝\u200d🧑",
-             page="today", fields=(field("notes", "long", "Notes or transcript (or a file path)"),))
+    @command("meeting", "minutes", group=G,
+             usage="/meeting start · /meeting stop · /meeting <notes, transcript or file>",
+             help="meeting notes: record it live (/meeting start … /meeting stop) or paste notes — summary, "
+                  "decisions, and action items sent to Today", title="Meeting notes", icon="🧑\u200d🤝\u200d🧑",
+             page="today", fields=(field("notes", "long", "Notes or transcript (or a file path) — or start / stop"),))
     def meeting(self, args: str, routed: bool = False):
         text = args.strip()
-        if text.lower().startswith("add"):
+        word = text.lower()
+        if word.startswith("add"):
             return self._meeting_actions_to_list()
+        # 13.4.2: record the meeting itself. The transcript is written up and
+        # its action items go straight onto Today.
+        live = False
+        if word in {"start", "record", "live", "begin", "başlat"}:
+            started = self.record("start")
+            return started.replace("/record stop writes the notes", "/meeting stop writes the notes and puts the "
+                                   "action items on Today") if started.startswith("🔴") else started
+        if word in {"stop", "end", "done", "finish", "bitir"}:
+            rec = self._recorder()
+            if not rec.running:
+                return "No meeting is being recorded. /meeting start begins one."
+            text = rec.stop()
+            if not text.strip():
+                return "I didn't catch any speech." + ("\n" + "\n".join(rec.errors[:3]) if rec.errors else "")
+            live = True
+        elif word == "status":
+            return self.record("status")
         path = kit.path_arg(text)
         if path is not None and path.is_file():
             if not security.permissions.ask(security.READ_FILE, str(path), context="/meeting"):
@@ -427,9 +447,16 @@ class Work:
                 lines.append(f"  ☐ {a.get('what')}{who}{when}")
         if data.get("open_questions"):
             lines += ["", "Open questions:"] + [f"  ? {q}" for q in data["open_questions"]]
+        saved = list(lines)
+        if live:
+            saved += ["", "## Transcript", "", text]
         path = kit.output_dir() / f"meeting_{kit.slug(data.get('title') or 'notes')}_{kit.stamp()}.md"
-        path.write_text("\n".join(lines), encoding="utf-8")
-        lines += ["", f"Saved: {path}", "/meeting add — put the action items on your to-do list"]
+        path.write_text("\n".join(saved), encoding="utf-8")
+        lines += ["", f"Saved: {path}"]
+        if live and data.get("actions"):
+            lines.append("✅ " + self._meeting_actions_to_list().replace("to-do list", "Today"))
+        elif data.get("actions"):
+            lines.append("/meeting add — put the action items on Today")
         return "\n".join(lines) + (f"\n{warning}" if warning else "")
 
     def _meeting_actions_to_list(self) -> str:

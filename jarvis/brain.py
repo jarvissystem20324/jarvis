@@ -99,6 +99,8 @@ class Brain:
         # call that must not be cut short (a deck as JSON, a whole CV). Mid's
         # 1,536 tokens cut an 8-slide deck off mid-JSON.
         self.min_tokens: int = 0
+        # The smart router's tier for the last chat message ("" when it did not route).
+        self.last_route: str = ""
 
     # --- public ----------------------------------------------------------
 
@@ -114,7 +116,8 @@ class Brain:
 
     def active_label(self) -> str:
         """Which backend is answering — shown in the UI status line."""
-        suffix = f" · {self.mode.label}" + (" · Code" if self.code_mode else "")
+        suffix = f" · {self.mode.label}" + (" · Code" if self.code_mode else "") + \
+            (f" · routed {self.last_route}" if getattr(self, "last_route", "") else "")
         if not self._active:
             return "not connected" + suffix
         model = self._last_model or self._model_override or providers.model_for(self._active)
@@ -228,7 +231,23 @@ class Brain:
             {"role": "user", "content": sent},
         ]
 
-        reply, error = self._chat_over_chain(messages, on_chunk=on_chunk)
+        # 13.4.2: in Mid, the smart router picks the cheapest model that can
+        # do this message. Only the order changes; the chain still backs it.
+        from . import router
+
+        self.last_route = ""
+        if router.applies(self):
+            tier = router.classify(user_message)
+            self.last_route = tier
+            started = time.monotonic()
+            route = router.targets(tier)
+            reply, error = (self._chat_over_chain(messages, on_chunk=on_chunk, targets=route) if route
+                            else self._chat_over_chain(messages, on_chunk=on_chunk))
+            if reply is not None:
+                router.record(tier, sum(len(str(m.get("content", ""))) for m in messages), len(reply),
+                              time.monotonic() - started, self.last_answered())
+        else:
+            reply, error = self._chat_over_chain(messages, on_chunk=on_chunk)
         if reply is None:
             return error or "No AI provider is configured."
 
@@ -502,7 +521,10 @@ class Brain:
                 continue
             if provider.name in self._dead or (provider.name, model) in self._slow_targets:
                 continue
-            if vision and not provider.vision:
+            # A caller may name a provider's own vision model (Cowork names
+            # NVIDIA's Nemotron VL to read the screen) even though that
+            # provider's chat model cannot see.
+            if vision and not provider.vision and model != provider.vision_model:
                 continue
             out.append((provider, model, extra_timeout or self.mode.fallback_timeout, True))
             seen.add((provider.name, model))
@@ -810,11 +832,11 @@ class Brain:
     def _no_provider_message() -> str:
         return (
             "No AI provider is reachable.\n\n"
-            "JARVIS works with no account at all via Pollinations, so this "
-            "usually means the connection failed. For a faster, more reliable "
-            "brain add one free key to your .env:\n"
-            "  GEMINI_API_KEY=...  (https://aistudio.google.com/apikey)\n"
-            "  GROQ_API_KEY=...    (https://console.groq.com/keys)"
+            "Either no key is set or the connection failed. Add one free key "
+            "in Settings (or your .env):\n"
+            "  GEMINI_API_KEY=...        (https://aistudio.google.com/apikey)\n"
+            "  GROQ_API_KEY=...          (https://console.groq.com/keys)\n"
+            "  POLLINATIONS_API_KEY=...  (https://enter.pollinations.ai, the last resort)"
         )
 
     def _trim(self) -> None:

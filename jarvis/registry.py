@@ -33,7 +33,8 @@ COMMANDS: dict[str, str] = {}
 HELP: list[tuple[str, str, str]] = []      # (group, usage, what it does)
 GROUPS = ("Make and write", "Design", "Documents", "Study", "Everyday", "Live info", "PC and files",
           "Security", "Coding", "Automation", "Media", "Music and games", "Health and money",
-          "Travel", "Türkiye", "Phone", "Productivity", "Voice, connections and fun", "Chat and AI")
+          "Travel", "Türkiye", "Phone", "Productivity", "Voice, connections and fun", "Chat and AI",
+          "Cowork", "Learn")
 
 # Field kinds a form knows how to draw.
 KINDS = ("text", "long", "number", "choice", "file", "files", "folder", "date", "time", "color", "bool")

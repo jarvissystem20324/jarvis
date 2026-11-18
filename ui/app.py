@@ -20,8 +20,9 @@ from jarvis.brain import Cancelled
 from jarvis.assistant import Jarvis, JarvisResponse
 from jarvis.config import get_output_dir
 from jarvis.images import DEFAULT_QUALITY, QUALITIES, SIZES
-from jarvis import applock, i18n, intents, reminders, schedule, updater
+from jarvis import applock, cowork, i18n, intents, reminders, schedule, updater
 from ui import notify, render, theme
+from ui.sliders import SlidingTabs
 from ui.eightui import FIRE_KINDS, EightUI
 from ui.tenui import TenUI, seq_label
 
@@ -32,6 +33,20 @@ PALETTE, THEME_NAME, FONT_SIZE = theme.from_env()
 # whichever palette the user picked rather than one hardcoded set.
 COLORS = dict(PALETTE)
 ctk.set_appearance_mode(PALETTE["appearance"])
+# customtkinter's buttons default to white text, which disappears on a light
+# theme's pale buttons and sidebar (White, Daylight). Dark text there instead.
+if PALETTE["appearance"] == "light":
+    try:
+        ctk.ThemeManager.theme["CTkButton"]["text_color"] = [PALETTE["text"], PALETTE["text"]]
+        ctk.ThemeManager.theme["CTkButton"]["text_color_disabled"] = [PALETTE["muted"], PALETTE["muted"]]
+        ctk.ThemeManager.theme["CTkOptionMenu"]["text_color"] = [PALETTE["text"], PALETTE["text"]]
+        ctk.ThemeManager.theme["CTkOptionMenu"]["fg_color"] = [PALETTE["panel"], PALETTE["panel"]]
+        ctk.ThemeManager.theme["CTkOptionMenu"]["button_color"] = [PALETTE["accent_dim"], PALETTE["accent_dim"]]
+        ctk.ThemeManager.theme["CTkOptionMenu"]["button_hover_color"] = [PALETTE["accent"], PALETTE["accent"]]
+    except (KeyError, AttributeError):
+        pass
+# White is black on white: keep every button's text readable on hover.
+theme.patch_monochrome_buttons(ctk, PALETTE)
 
 PREVIEW_MAX = 420
 # An answer that took longer than this, while you were in another window,
@@ -131,6 +146,8 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.refresh_mode()
         self.refresh_code_mode()
         self._show_tab("chat")
+        # Cowork jobs report from their own threads; every update comes back here.
+        cowork.manager.subscribe(lambda job: safe_after(self, lambda j=job: self._cowork_update(j)))
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._bind_shortcuts()
@@ -317,9 +334,27 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.nav.pack(fill="both", expand=True, padx=4, pady=(0, 2))
         self._build_nav()
 
+        # 13.4.2: Chat and Code are one switch at the top, like Claude's,
+        # instead of two pages in the sidebar. Every page still draws into
+        # self.content exactly as before; the bar sits above it.
+        main = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
+        main.grid(row=0, column=1, sticky="nsew")
+        main.grid_rowconfigure(1, weight=1)
+        main.grid_columnconfigure(0, weight=1)
+        self.main_area = main
+        top = ctk.CTkFrame(main, fg_color=COLORS["bg"], corner_radius=0)
+        top.grid(row=0, column=0, sticky="ew")
+        self.top_bar = top
+        # Icon-only, as the user drew it: a speech bubble for Chat, </> for Code.
+        self.top_tabs = SlidingTabs(top, (("chat", "", "chat"), ("code", "", "code")),
+                                    command=self._top_tab, colors=COLORS, bg=COLORS["bg"], height=34,
+                                    min_width=44, value="chat",
+                                    tips={"chat": i18n.t("Chat"), "code": i18n.t("Code")})
+        self.top_tabs.pack(pady=(10, 0))
+
         # Main content area
-        self.content = ctk.CTkFrame(self, fg_color=COLORS["bg"], corner_radius=0)
-        self.content.grid(row=0, column=1, sticky="nsew")
+        self.content = ctk.CTkFrame(main, fg_color=COLORS["bg"], corner_radius=0)
+        self.content.grid(row=1, column=0, sticky="nsew")
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
 
@@ -363,9 +398,19 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             text="🎤",
             width=44,
             height=44,
+            fg_color=COLORS["accent_dim"],
+            hover_color=COLORS["accent"],
             command=self._listen,
         )
         self.mic_btn.grid(row=0, column=1, padx=(0, 8))
+
+        # 13.4.2: Cowork lives next to Send, the same sliding switch as the
+        # Chat / Code bar. On "Cowork", what you send becomes a background job.
+        self._cowork_on = False
+        self.cowork_switch = SlidingTabs(input_row, (("ask", i18n.t("Ask")), ("cowork", "Cowork")),
+                                         command=self._set_cowork, colors=COLORS, bg=COLORS["bg"], height=44,
+                                         min_width=52, font_size=13, value="ask")
+        self.cowork_switch.grid(row=0, column=2, padx=(0, 8))
 
         self.send_btn = ctk.CTkButton(
             input_row,
@@ -376,7 +421,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             hover_color=COLORS["accent"],
             command=self._send_chat,
         )
-        self.send_btn.grid(row=0, column=2)
+        self.send_btn.grid(row=0, column=3)
 
         # Shown only while something is in flight. Max and Hyperdrive can take
         # minutes, and before this there was no way out but killing the app.
@@ -389,13 +434,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             hover_color="#b91c1c",
             command=self._stop,
         )
-        self.stop_btn.grid(row=0, column=3, padx=(8, 0))
+        self.stop_btn.grid(row=0, column=4, padx=(8, 0))
         self.stop_btn.grid_remove()
 
         # 10.0: tools that match what is being typed, so nobody has to
         # remember a command to find one.
         self.chips_row = ctk.CTkFrame(input_row, fg_color="transparent")
-        self.chips_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.chips_row.grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
         self.chips_row.grid_remove()
         self.chat_input.bind("<KeyRelease>", self._chips_later, add="+")
 
@@ -427,6 +472,101 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             command=lambda: self._quick(self._set_handsfree(not self._handsfree_on)),
         )
         self._handsfree_button.pack(side="left", padx=(0, 6))
+
+    # --- 13.4.2: the Chat / Code bar and Cowork -----------------------------
+
+    def _top_tab(self, value: str) -> None:
+        self._show_tab(value)
+
+    def _sync_top_tabs(self, tab: str) -> None:
+        try:
+            self.top_tabs.set(tab if tab in {"chat", "code"} else None)
+        except Exception:
+            pass
+
+    def _set_cowork(self, value: str) -> None:
+        self._cowork_on = value == "cowork"
+        try:
+            self.chat_input.configure(placeholder_text=(
+                "Describe a job for Cowork — e.g. compare the PDFs in C:\\…\\Offers and make a table"
+                if self._cowork_on else "Ask JARVIS anything... (/image prompt to generate)"))
+            self.send_btn.configure(text="Start" if self._cowork_on else i18n.t("Send"))
+        except Exception:
+            pass
+        if self._cowork_on:
+            self.show_cowork_panel(True)
+        self.chat_input.focus_set()
+
+    def show_cowork_panel(self, show: bool = True) -> None:
+        panel = getattr(self, "cowork_panel", None)
+        if show:
+            if self._mini:
+                return
+            if panel is None:
+                from ui.cowork_panel import CoworkPanel
+
+                panel = self.cowork_panel = CoworkPanel(self.chat_frame, self, COLORS)
+            if not panel.winfo_ismapped() and getattr(self, "_chat_list_shown", False):
+                # Room for the message box: the conversation list folds away
+                # while Cowork is open, and comes back when it closes.
+                self._toggle_chat_list()
+                self._list_folded_for_cowork = True
+            panel.grid(row=0, column=2, rowspan=3, sticky="nsew", padx=(0, 12), pady=0)
+        elif panel is not None:
+            panel.grid_remove()
+            if getattr(self, "_list_folded_for_cowork", False) and not self._chat_list_shown and not self._mini:
+                self._toggle_chat_list()
+            self._list_folded_for_cowork = False
+
+    def start_cowork(self, goal: str) -> None:
+        """Start a job from the window: the switch, the panel's Retry, or a command."""
+        try:
+            job = cowork.manager.start(goal)
+        except cowork.JobError as exc:
+            self._append_message("JARVIS", str(exc), is_user=False, record=False)
+            return
+        self.show_cowork_panel(True)
+        self._append_message(
+            "JARVIS", f"🧰 On it — Cowork job #{job.id} ({job.label()}). It runs in the background, so keep "
+                      "chatting; its plan and progress are on the right, and Stop works at any time.",
+            is_user=False, record=False)
+
+    def _cowork_update(self, job) -> None:
+        """Every change to a job, on the Tk thread."""
+        panel = getattr(self, "cowork_panel", None)
+        if panel is None and job.running:
+            self.show_cowork_panel(True)      # a job started from a typed /cowork or a schedule
+            panel = getattr(self, "cowork_panel", None)
+        if panel is not None:
+            panel.update_job(job)
+        announced = self.__dict__.setdefault("_cowork_announced", set())
+        if not job.running and job.id not in announced and job.finished:
+            announced.add(job.id)
+            files = "\n".join(f"  {p}" for p in job.outputs)
+            if job.status == "done":
+                text = f"🧰 Job #{job.id} done — {job.title}\n\n{job.result}" + (f"\n\nFiles:\n{files}" if files else "")
+            elif job.status == "stopped":
+                text = f"🧰 Job #{job.id} stopped." + (f" Files it made so far:\n{files}" if files else "")
+            else:
+                text = f"🧰 Job #{job.id} couldn't finish: {job.error}"
+            self._append_message("JARVIS", text, is_user=False, record=False)
+            try:
+                if self.focus_displayof() is None:      # you were in another window
+                    notify.flash(self)
+                    notify.toast(f"JARVIS — Cowork job #{job.id}", text.splitlines()[0][:120])
+            except Exception:
+                pass
+
+    def run_tool_text(self, work) -> None:
+        """Run work() off the Tk thread and show what it returns in the chat."""
+        def run():
+            try:
+                result = work()
+            except Exception as exc:
+                result = f"Something went wrong: {exc}"
+            safe_after(self, lambda r=result: self._quick(r))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # --- conversation list ------------------------------------------------
 
@@ -707,12 +847,15 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             self.sidebar_frame.grid_remove()
             self.chat_list_panel.grid_remove()
             self.quick_row.grid_remove()
+            self.top_bar.grid_remove()
+            self.show_cowork_panel(False)
             self.minsize(360, 420)
             self.geometry("440x620")
             self.attributes("-topmost", True)
         else:
             self.attributes("-topmost", False)
             self.sidebar_frame.grid()
+            self.top_bar.grid()
             if self._chat_list_shown:
                 self.chat_list_panel.grid()
             self.quick_row.grid()
@@ -1247,7 +1390,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             header.pack(fill="x", pady=(6, 0))
             frame = ctk.CTkFrame(self.nav, fg_color="transparent")
             for page in PAGES:
-                if page.section != section:
+                if page.section != section or not page.nav:
                     continue
                 b = ctk.CTkButton(
                     frame, text=f"{page.icon}  {i18n.t(page.label)}", anchor="w", height=32,
@@ -1258,10 +1401,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
                 self.nav_buttons[page.key] = b
             self._nav_sections[section] = (header, frame)
             self._set_section(section, section in opened, save=False)
-        self.chat_tab_btn = self.nav_buttons["chat"]
-        self.image_tab_btn = self.nav_buttons["image"]
-        self.code_tab_btn = self.nav_buttons["code"]
-        self.design_tab_btn = self.nav_buttons["design"]
+        # Chat and Code are on the top bar now (13.4.2).
+        self.chat_tab_btn = self.nav_buttons.get("chat")
+        self.image_tab_btn = self.nav_buttons.get("image")
+        self.code_tab_btn = self.nav_buttons.get("code")
+        self.design_tab_btn = self.nav_buttons.get("design")
 
     def _set_section(self, section: str, open_: bool, save: bool = True) -> None:
         header, frame = self._nav_sections[section]
@@ -1313,8 +1457,9 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             button.configure(
                 fg_color=COLORS["accent_dim"] if name == tab else "transparent"
             )
+        self._sync_top_tabs(tab)
         section = BY_KEY[tab].section
-        if not self._nav_sections[section][1].winfo_ismapped():
+        if BY_KEY[tab].nav and not self._nav_sections[section][1].winfo_ismapped():
             self._set_section(section, True)
 
         if tab == "image":
@@ -1515,12 +1660,15 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
 
     def refresh_mode(self) -> None:
         mode = self.jarvis.brain.mode
+        # A monochrome theme (White: black on white) keeps the modes black too.
+        colour = COLORS["accent"] if COLORS["accent"] == COLORS["text"] else mode.accent
         try:
-            self.mode_btn.configure(text=f"⚡  {mode.label}", text_color=mode.accent)
+            self.mode_btn.configure(text=f"⚡  {mode.label}", text_color=colour)
             self.mode_blurb.configure(text=mode.blurb)
             active = [m.name for m in modes.ALL].index(mode.name)
             for i, pip in enumerate(self._pip_widgets):
-                pip.configure(fg_color=mode.accent if i <= active else COLORS["panel"])
+                pip.configure(fg_color=colour if i <= active else (
+                    COLORS["accent_dim"] if colour == COLORS["text"] else COLORS["panel"]))
         except Exception:
             pass
 
@@ -1528,12 +1676,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         """Keep the sidebar honest when /code is typed instead of clicked."""
         try:
             on = self.jarvis.brain.code_mode
-            self.code_tab_btn.configure(
-                text=f"⌨  {i18n.t('Coding')}  ●" if on else f"⌨  {i18n.t('Coding')}",
-                fg_color=COLORS["accent_dim"] if on else (
-                    COLORS["accent_dim"] if self.active_tab == "code" else "transparent"
-                ),
-            )
+            if self.code_tab_btn is not None:
+                self.code_tab_btn.configure(
+                    text=f"⌨  {i18n.t('Coding')}  ●" if on else f"⌨  {i18n.t('Coding')}",
+                    fg_color=COLORS["accent_dim"] if on else (
+                        COLORS["accent_dim"] if self.active_tab == "code" else "transparent"
+                    ),
+                )
             self.title(f"JARVIS {__version__}{'  —  code mode' if on else ''}")
         except Exception:
             pass
@@ -1722,7 +1871,8 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         """
         from ui.pages import PAGES
 
-        pairs = tuple((self.nav_buttons[p.key], f"{p.icon}  ", p.label) for p in PAGES) + (
+        pairs = tuple((self.nav_buttons[p.key], f"{p.icon}  ", p.label) for p in PAGES
+                      if p.key in self.nav_buttons) + (
             (self.settings_btn, "⚙  ", "Settings"),
             (self.update_btn, "⟳  ", "Check for Updates"),
             (self.send_btn, "", "Send"),
@@ -1735,11 +1885,16 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
                 continue
         try:
             self.status_label.configure(text=i18n.t("Ready"))
-            self.chat_input.configure(
-                placeholder_text=i18n.t(
-                    "Ask JARVIS anything... (/image prompt to generate)"
+            if not getattr(self, "_cowork_on", False):
+                self.chat_input.configure(
+                    placeholder_text=i18n.t(
+                        "Ask JARVIS anything... (/image prompt to generate)"
+                    )
                 )
-            )
+            # The sliding switches redraw their labels in the new language.
+            self.top_tabs.tips = {"chat": i18n.t("Chat"), "code": i18n.t("Code")}
+            self.cowork_switch.options = [("ask", i18n.t("Ask")), ("cowork", "Cowork")]
+            self.cowork_switch.draw()
         except Exception:
             pass
         self.refresh_mode()
@@ -2363,6 +2518,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             return
         self.chat_input.delete(0, "end")
         self._hide_chips()
+        # 13.4.2: with Cowork switched on, what you send is a job, not a question.
+        # A typed /command still runs as one.
+        if getattr(self, "_cowork_on", False) and not text.startswith("/"):
+            self._append_message("You", self.jarvis.mask(text), is_user=True)
+            self._last_input = text
+            self.start_cowork(text)
+            return
         # 8.0: a password to check, a 2FA secret, an app password: asked for
         # in a hidden box and handed straight to the function, never kept in
         # the chat, the history or a prompt.

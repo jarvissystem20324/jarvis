@@ -267,7 +267,7 @@ def test_pollinations_is_asked_for_its_safe_mode(monkeypatch):
             return b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
     def fake_urlopen(url, timeout=0):
-        seen["url"] = url
+        seen["url"] = getattr(url, "full_url", url)  # a Request when a key header is sent
         return Response()
 
     monkeypatch.setattr(images.net, "urlopen", fake_urlopen)

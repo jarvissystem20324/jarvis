@@ -25,7 +25,9 @@ from pathlib import Path
 from . import vault
 from .config import get_data_dir
 
-READABLE = {".pdf", ".docx", ".txt", ".md", ".markdown", ".rst", ".csv", ".html", ".htm"}
+READABLE = {".pdf", ".docx", ".txt", ".md", ".markdown", ".rst", ".csv", ".html", ".htm",
+            # 13.4.2: company folders are mostly spreadsheets and decks.
+            ".xlsx", ".xlsm", ".pptx"}
 MAX_FILES = 800
 MAX_FILE_BYTES = 30_000_000
 PASSAGE_WORDS = 180
@@ -90,6 +92,62 @@ def _read_text(path: Path) -> list[tuple[int, str]]:
     return [(0, text)]
 
 
+def _read_xlsx(path: Path, max_rows: int = 2000) -> list[tuple[int, str]]:
+    """One 'page' per sheet: its rows as tab-separated lines."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return []
+    try:
+        book = load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return []
+    pages = []
+    try:
+        for number, sheet in enumerate(book.worksheets, 1):
+            lines = []
+            for row in sheet.iter_rows(values_only=True):
+                cells = ["" if v is None else str(v) for v in row]
+                if any(c.strip() for c in cells):
+                    lines.append("\t".join(cells).rstrip())
+                if len(lines) >= max_rows:
+                    break
+            if lines:
+                pages.append((number, f"Sheet: {sheet.title}\n" + "\n".join(lines)))
+    except Exception:
+        return pages
+    finally:
+        try:
+            book.close()
+        except Exception:
+            pass
+    return pages
+
+
+def _read_pptx(path: Path) -> list[tuple[int, str]]:
+    """One page per slide, with its notes."""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return []
+    try:
+        deck = Presentation(str(path))
+    except Exception:
+        return []
+    pages = []
+    for number, slide in enumerate(deck.slides, 1):
+        texts = [shape.text_frame.text for shape in slide.shapes
+                 if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip()]
+        try:
+            if slide.has_notes_slide and slide.notes_slide.notes_text_frame.text.strip():
+                texts.append("Notes: " + slide.notes_slide.notes_text_frame.text)
+        except Exception:
+            pass
+        if texts:
+            pages.append((number, "\n".join(t.replace("\v", "\n") for t in texts)))
+    return pages
+
+
 def read_document(path: Path) -> list[tuple[int, str]]:
     """(page, text) pairs. An unreadable file yields nothing, not an error."""
     suffix = path.suffix.lower()
@@ -97,7 +155,21 @@ def read_document(path: Path) -> list[tuple[int, str]]:
         return _read_pdf(path)
     if suffix == ".docx":
         return _read_docx(path)
+    if suffix in {".xlsx", ".xlsm"}:
+        return _read_xlsx(path)
+    if suffix == ".pptx":
+        return _read_pptx(path)
     return _read_text(path)
+
+
+def document_text(path: Path, limit: int = 60_000) -> str:
+    """The whole readable text of one file, pages marked, cut at `limit`."""
+    parts = []
+    for page, text in read_document(path):
+        parts.append((f"[page {page}]\n" if page else "") + text.strip())
+        if sum(len(p) for p in parts) >= limit:
+            break
+    return "\n\n".join(parts)[:limit]
 
 
 def _passages(relative: str, pages: list[tuple[int, str]]) -> list[Passage]:

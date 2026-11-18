@@ -85,7 +85,7 @@ class TodayPage(Hub):
         self.eod_view = ResultView(eod.inner, self.app)
         self.eod_view.pack(fill="x")
         self.section("More")
-        self.tools("meeting", "goal")
+        self.tools("meeting", "goal", "cowork", "profile")
 
     def on_show(self) -> None:
         self.refresh_tasks()

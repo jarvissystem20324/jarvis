@@ -145,7 +145,9 @@ def test_tool_cards_appear_at_once_and_their_forms_follow(app):
 def test_the_sidebar_lists_every_page_in_folding_sections(app):
     from ui.pages import PAGES
 
-    assert set(app.nav_buttons) == {p.key for p in PAGES}
+    # 13.4.2: Chat and Code are the switch at the top, not sidebar rows.
+    assert set(app.nav_buttons) == {p.key for p in PAGES if p.nav}
+    assert "chat" not in app.nav_buttons and "code" not in app.nav_buttons
     header, frame = app._nav_sections["Life"]
     app._set_section("Life", False)
     app.update()

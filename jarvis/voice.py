@@ -64,6 +64,9 @@ class Voice:
         # round-trip on every utterance and go straight to offline speech.
         # Without an OpenAI key there is nothing to try in the first place.
         self._openai_tts_ok = _HAS_AUDIO and providers.has_key(providers.OPENAI)
+        # Pollinations' tts-1 (12.6.2): the last cloud voice before the
+        # robotic built-in one, on the same free key as its images.
+        self._pollinations_tts_ok = _HAS_AUDIO and providers.has_key(providers.POLLINATIONS)
         self._local_stt = None  # lazily loaded faster-whisper model
         self._say_proc: subprocess.Popen | None = None
 
@@ -164,6 +167,10 @@ class Voice:
             return
         if self._openai_tts_ok and self._speak_openai(text):
             return
+        if self._stop_flag.is_set():
+            return
+        if self._pollinations_tts_ok and self._speak_pollinations(text):
+            return
         if not self._stop_flag.is_set():
             self._speak_offline(text)
 
@@ -237,10 +244,33 @@ class Voice:
             return False
         except Exception:
             return False
+        return self._play_pcm(pcm)
 
+    def _speak_pollinations(self, text: str) -> bool:
+        """Pollinations' tts-1: 24 kHz PCM, like OpenAI's, on its free key.
+
+        tts-1 takes no `instructions`, so the voice alone sets the tone.
+        """
+        from openai import AuthenticationError, PermissionDeniedError, RateLimitError
+
+        try:
+            with providers.get_client(providers.POLLINATIONS).audio.speech.with_streaming_response.create(
+                model=get_setting("JARVIS_POLLINATIONS_TTS_MODEL", providers.POLLINATIONS_TTS_MODEL),
+                voice=get_tts_voice(),
+                input=text[:4000],
+                response_format="pcm",
+            ) as response:
+                pcm = response.read()
+        except (AuthenticationError, PermissionDeniedError, RateLimitError):
+            self._pollinations_tts_ok = False
+            return False
+        except Exception:
+            return False
+        return self._play_pcm(pcm)
+
+    def _play_pcm(self, pcm: bytes) -> bool:
         if self._stop_flag.is_set() or not pcm:
             return True  # treated as handled; nothing more to say
-
         try:
             samples = np.frombuffer(pcm, dtype=np.int16)
             sd.play(samples, samplerate=TTS_SAMPLE_RATE)

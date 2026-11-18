@@ -144,6 +144,56 @@ def test_cast_stop_turns_off_what_cast_started(jarvis, monkeypatch, tmp_path):
     assert not phonelink.link.casts and started[-1] == "stopped"
 
 
+# --- images (10.5.3) ----------------------------------------------------------------------------------
+
+def test_images_fall_back_in_order_and_say_how_to_fix_it(monkeypatch):
+    from jarvis import images
+
+    gen = images.ImageGenerator()
+    tried = []
+
+    def failing(name):
+        def run(*a, **k):
+            tried.append(name)
+            raise images.ImageGenerationError("down")
+        return run
+
+    monkeypatch.setattr(images, "get_image_provider", lambda: "auto")
+    monkeypatch.setattr(gen, "_cloudflare_ready", lambda: True)
+    monkeypatch.setattr(gen, "_nvidia_ready", lambda: True)
+    monkeypatch.setattr(gen, "_generate_cloudflare", failing("cloudflare"))
+    monkeypatch.setattr(gen, "_generate_flux", failing("nvidia"))
+    monkeypatch.setattr(gen, "_generate_pollinations", failing("pollinations"))
+    with pytest.raises(images.ImageGenerationError) as caught:
+        gen._render("a cat", "1024x1024", "medium", 1)
+    assert tried == ["cloudflare", "nvidia", "pollinations"]
+    assert "Cloudflare token" in str(caught.value) and "Pollinations key" in str(caught.value)
+
+
+def test_nvidia_flux_gets_no_seed_and_an_allowed_size(monkeypatch):
+    from jarvis import images
+
+    sent = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"image": "iVBORw0KGgo="}'
+
+    def capture(request, timeout=0):
+        sent.update(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr(images.net, "urlopen", capture)
+    images.ImageGenerator()._generate_flux("a cat", "1536x1024", 7)
+    assert "seed" not in sent and (sent["width"], sent["height"]) == (1344, 1024)
+
+
 # --- the AI core -----------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("message,dead", [

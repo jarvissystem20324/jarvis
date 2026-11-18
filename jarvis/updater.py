@@ -111,6 +111,24 @@ def get_update_url() -> str:
     return "" if value.lower() in {"off", "none", "no", "false", "0"} else value
 
 
+# 13.4.2: the preview channel. A big bundle goes to people who chose
+# "Get previews" (Settings → Updates) before it goes to everyone, which is what
+# would have caught the untested "12.0.1". Previews are published under the
+# fixed GitHub tag "preview" (a pre-release, so /latest never points at it).
+PREVIEW_UPDATE_URL = "https://github.com/jarvissystem20324/jarvis/releases/download/preview/update.json"
+CHANNEL_SETTING = "JARVIS_UPDATE_CHANNEL"
+
+
+def channel() -> str:
+    """'preview' or 'stable'."""
+    return "preview" if get_setting(CHANNEL_SETTING, "stable").strip().lower() in {"preview", "beta", "on"} \
+        else "stable"
+
+
+def preview_url() -> str:
+    return get_setting("JARVIS_PREVIEW_URL", PREVIEW_UPDATE_URL)
+
+
 def parse_version(text: str) -> tuple[int, ...]:
     """'2.10.1' -> (2, 10, 1). Unparseable pieces sort as 0."""
     parts = []
@@ -174,7 +192,31 @@ def _uncached(url: str) -> str:
 
 
 def check_for_update(url: str | None = None) -> UpdateInfo | None:
-    """Return an UpdateInfo if the manifest advertises a newer version."""
+    """Return an UpdateInfo if the manifest advertises a newer version.
+
+    On the preview channel both manifests are read and the newer offer wins:
+    a preview user still gets a stable fix that is newer than the last preview.
+    """
+    if url is None and channel() == "preview" and get_update_url():
+        stable_error = None
+        try:
+            stable = _check_manifest(get_update_url())
+        except UpdateError as exc:
+            stable, stable_error = None, exc
+        try:
+            preview = _check_manifest(preview_url())
+        except UpdateError:
+            preview = None   # no preview published right now is normal
+        offers = [info for info in (stable, preview) if info is not None]
+        if not offers:
+            if stable_error is not None:
+                raise stable_error
+            return None
+        return max(offers, key=lambda info: parse_version(info.version))
+    return _check_manifest(url)
+
+
+def _check_manifest(url: str | None = None) -> UpdateInfo | None:
     manifest_url = (url or get_update_url()).strip()
     if not manifest_url:
         raise UpdateError(

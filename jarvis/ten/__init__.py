@@ -23,10 +23,12 @@ from .lifestyle import Lifestyle
 from .phone import Phone
 from .work import Work
 from .design10 import Design10
+from .cowork10 import CoworkCommands
+from .learn import Learn
 
 
 class Ten(Office, School, Coding, System, Shield10, Automate, AIHelp, Media, Creator, Play, Lifestyle, Travel10, Phone,
-          Work, Design10):
+          Work, Design10, CoworkCommands, Learn):
     pass
 
 

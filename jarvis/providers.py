@@ -5,9 +5,9 @@ Pollinations all work through the same SDK with nothing but a different base
 URL. One code path covers four providers instead of four bespoke clients.
 
 Ordering is deliberate: free-with-a-free-key first (best quality per zero
-pounds), then paid, then the keyless service last. Pollinations needs no
-account at all, which makes it the floor JARVIS can always fall back to — so
-the app keeps working when a key is missing, wrong, or out of credit.
+pounds), then paid, then Pollinations last of all. Its free models are the
+weakest of the lot, but it answers text, speech and transcription on one key,
+so it is the floor JARVIS falls back to when everything else is down.
 """
 
 from __future__ import annotations
@@ -169,13 +169,26 @@ CLOUDFLARE = Provider(
 POLLINATIONS = Provider(
     name="pollinations",
     label="Pollinations",
-    base_url="https://text.pollinations.ai/openai",
-    key_env=None,
+    # The keyed API (12.6.2, "The Pollen Update"). The old keyless
+    # text.pollinations.ai refused real prompts from August 2026; with a free
+    # key from enter.pollinations.ai, gen.pollinations.ai speaks the OpenAI
+    # format in full. Measured on 2026-11-18 with the user's key: "openai"
+    # (GPT-5.4 nano) answered in 2-5 s, streamed, called a tool correctly and
+    # sees images; tts-1 spoke in 3 s; whisper-1 transcribed it word for word
+    # in 11 s. Not as strong as the others, so it is the last resort for chat,
+    # the agent, speech and transcription alike.
+    base_url="https://gen.pollinations.ai/v1",
+    key_env="POLLINATIONS_API_KEY",
     chat_model="openai",
+    stt_model="whisper-1",
+    vision=True,
     free=True,
-    transport="http",
-    notes="Images only — its free text tier now refuses real prompts.",
+    signup="https://enter.pollinations.ai",
+    notes="Free key. Last resort for chat, the agent, voice and transcription; also images.",
 )
+
+# Pollinations' voice, used when the natural voice and OpenAI's can't speak.
+POLLINATIONS_TTS_MODEL = "tts-1"
 
 OPENROUTER = Provider(
     name="openrouter",
@@ -247,16 +260,15 @@ CHAT_PROVIDERS: tuple[Provider, ...] = (
     LLMSRELAY,
 )
 
-# Those tried automatically. Pollinations is excluded: as of August 2026 its
-# keyless text tier answers 402 to anything longer than a trivial prompt, so
-# leaving it in the chain would burn a request and confuse the error every
-# time. It still works for images, and `JARVIS_PROVIDER=pollinations` will
-# still pin it for anyone who wants it.
+# Those tried automatically.
 # OpenRouter before OpenAI: free before paid, always. Blueminds joined the
 # paid end in 8.0.1: with credit on the account and a model that answers in
 # half a second, the reason it was opt-in (90 seconds to fail) is gone.
+# Pollinations comes after everything, paid included: it is free, but the
+# weakest, and the user asked for it as the last resort (12.6.2). Without a
+# Pollinations key it is skipped like any other unkeyed provider.
 AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
-    GEMINI, GROQ, INCEPTION, NVIDIA, CLOUDFLARE, OPENROUTER, MISTRAL, BLUEMINDS, OPENAI,
+    GEMINI, GROQ, INCEPTION, NVIDIA, CLOUDFLARE, OPENROUTER, MISTRAL, BLUEMINDS, OPENAI, POLLINATIONS,
 )
 
 # Known, keyed, but never tried unless asked for. A provider that takes 90
@@ -268,7 +280,7 @@ AUTO_CHAT_PROVIDERS: tuple[Provider, ...] = (
 # named for one job; see Brain._attempts).
 OPT_IN_PROVIDERS: tuple[Provider, ...] = (LLMSRELAY,)
 
-STT_PROVIDERS: tuple[Provider, ...] = (GROQ, MISTRAL, OPENAI)
+STT_PROVIDERS: tuple[Provider, ...] = (GROQ, MISTRAL, OPENAI, POLLINATIONS)
 
 BY_NAME = {p.name: p for p in CHAT_PROVIDERS}
 

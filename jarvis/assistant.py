@@ -1594,4 +1594,11 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
 
     def _maybe_speak(self, text: str) -> None:
         if self.voice_enabled and self.voice.tts_available():
-            self.voice.speak(text)
+            # 13.4.2: the language partner speaks its language, and reads the
+            # answer, not the list of corrections under it.
+            language = getattr(self, "speak_language", None)
+            spoken = self.spoken_part(text) if hasattr(self, "spoken_part") else text
+            if language:
+                self.voice.speak(spoken, language=language)
+            else:
+                self.voice.speak(spoken)

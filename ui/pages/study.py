@@ -44,6 +44,8 @@ class StudyPage(Hub):
         self.tools("essaygrade", "essaycheck", "gradelevel", "bookreport")
         self.section("Projects")
         self.tools("sciencefair", "labreport")
+        self.section("Coding, languages and your future")
+        self.tools("codetutor", "partner", "uni", "career", "internshipcv")
         self.section("For teachers")
         self.tools("lessonplan", "teacherworksheet", "rubric", "worksheet")
 

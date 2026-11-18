@@ -37,6 +37,8 @@ FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("LLMSRELAY_API_KEY", "LLMsRelay  (paid relay, coding agent)", "llmsrelay.com", False),
     # Not a chat provider: web search, tested and counted on its own.
     ("FIRECRAWL_API_KEY", "Firecrawl  (web search)", "firecrawl.dev/app/api-keys", False),
+    # Images only: without a key Pollinations allows one picture every 45 s.
+    ("POLLINATIONS_API_KEY", "Pollinations  (last resort: chat, voice, images)", "enter.pollinations.ai/keys", True),
 )
 
 _SETTING = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
@@ -424,6 +426,21 @@ class SettingsWindow(ctk.CTkToplevel):
             menu.pack(side="left")
             self.choices[env_name] = (menu, {v: k for k, v in switch.items()})
 
+        # 13.4.2: previews first, and the smart router.
+        row = self._labelled(parent, "Updates")
+        menu = ctk.CTkOptionMenu(row, values=["Stable", "Get previews"], width=140)
+        menu.set("Get previews" if self.original.get("JARVIS_UPDATE_CHANNEL", "").strip().lower()
+                 in {"preview", "beta", "on"} else "Stable")
+        menu.pack(side="left")
+        self.choices["JARVIS_UPDATE_CHANNEL"] = (menu, {"Stable": "stable", "Get previews": "preview"})
+
+        row = self._labelled(parent, "Smart router")
+        menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+        menu.set("Off" if self.original.get("JARVIS_ROUTER", "on").strip().lower() in {"off", "0", "false", "no"}
+                 else "On")
+        menu.pack(side="left")
+        self.choices["JARVIS_ROUTER"] = (menu, {v: k for k, v in switch.items()})
+
         row = self._labelled(parent, "Notifications corner")
         menu = ctk.CTkOptionMenu(row, values=["Bottom right", "Top right"], width=140)
         menu.set("Top right" if self.original.get("JARVIS_TOAST_CORNER", "") == "top" else "Bottom right")
@@ -587,7 +604,8 @@ class SettingsWindow(ctk.CTkToplevel):
     def _refresh_summary(self) -> None:
         filled = sum(
             1 for name, e in self.entries.items()
-            if name.endswith("_API_KEY") and name != websearch.FIRECRAWL_ENV and e.get().strip()
+            if name.endswith("_API_KEY") and name != websearch.FIRECRAWL_ENV
+            and e.get().strip()
         )
         if filled >= 2:
             self.summary.configure(

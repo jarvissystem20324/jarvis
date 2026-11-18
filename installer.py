@@ -72,6 +72,7 @@ PROVIDER_FIELDS = (
     ("CLOUDFLARE_API_TOKEN", "Cloudflare Workers AI  (free)", "cfat_... or a 40-character token"),
     ("CLOUDFLARE_ACCOUNT_ID", "Cloudflare account ID", "32 hex characters"),
     ("OPENROUTER_API_KEY", "OpenRouter  (free)", "sk-or-..."),
+    ("POLLINATIONS_API_KEY", "Pollinations  (free, last resort)", "sk_... from enter.pollinations.ai"),
     ("BLUEMINDS_API_KEY", "Blueminds  (paid relay)", "sk-..."),
     ("LLMSRELAY_API_KEY", "LLMsRelay  (paid relay, coding agent)", "sk-cs4-..."),
     ("OPENAI_API_KEY", "OpenAI  (paid)", "sk-..."),

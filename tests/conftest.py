@@ -29,9 +29,11 @@ if str(ROOT) not in sys.path:
 os.environ["JARVIS_POWER_DRYRUN"] = "1"
 # Paid per call, and the developer's real .env loads underneath the tests.
 # Set before it loads (load_dotenv never overrides), so no test can spend
-# Firecrawl credit or Claude Opus tokens; tests that need a key set a fake.
+# Firecrawl credit, Claude Opus tokens or Pollinations pollen (12.6.2: it is
+# in the chat chain now); tests that need a key set a fake.
 os.environ["FIRECRAWL_API_KEY"] = ""
 os.environ["LLMSRELAY_API_KEY"] = ""
+os.environ["POLLINATIONS_API_KEY"] = ""
 # Since 10.0.2 a blank address means GitHub's; no window a test opens should
 # go looking for an update.
 os.environ["JARVIS_UPDATE_URL"] = "off"

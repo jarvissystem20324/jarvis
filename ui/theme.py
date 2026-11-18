@@ -116,6 +116,31 @@ THEMES["ironman"] = {
     "num": "#ffd54f",
 }
 
+# 13.4.2: a clean white theme, full black on white — no colour accent, the
+# user's choice. Body text on bg is 21:1, muted text 7.5:1. The two extra keys
+# make the Chat / Code switch a white chip on a grey track.
+THEMES["white"] = {
+    "label": "White",
+    "appearance": "light",
+    "bg": "#ffffff",
+    "panel": "#f4f4f4",
+    "accent": "#000000",
+    "accent_dim": "#e4e4e4",
+    "text": "#000000",
+    "user": "#000000",
+    "muted": "#555555",
+    "error": "#dc2626",
+    "ok": "#15803d",
+    "code_bg": "#f6f8fa",
+    "kw": "#8250df",
+    "str": "#0a7c35",
+    "com": "#6e7781",
+    "num": "#b35900",
+    "pill": "#ffffff",
+    "pill_line": "#d1d5db",
+    "hover": "#d4d4d4",
+}
+
 # Every theme must define exactly these. Checked at import so a half-written
 # palette fails here rather than halfway through drawing the window.
 REQUIRED = set(THEMES[DEFAULT])
@@ -123,6 +148,41 @@ for _name, _palette in THEMES.items():
     _missing = REQUIRED - set(_palette)
     if _missing:
         raise RuntimeError(f"theme '{_name}' is missing: {', '.join(sorted(_missing))}")
+
+
+def monochrome(palette: dict[str, str]) -> bool:
+    """Black on white (or white on black): the accent is the text colour itself."""
+    return palette.get("accent", "").lower() == palette.get("text", "").lower()
+
+
+def patch_monochrome_buttons(ctk, palette: dict[str, str]) -> None:
+    """In a monochrome theme a button that hovers to — or is filled with — the
+    accent would put black text on black. Hover goes light grey instead, and a
+    button filled with the accent gets white text. Every button in the window
+    goes through here, so no page needs to know about the theme."""
+    if not monochrome(palette):
+        return
+    accent, hover, inverse = palette["accent"].lower(), palette.get("hover", "#d4d4d4"), palette["bg"]
+    button = ctk.CTkButton
+    if getattr(button, "_mono_patched", False):
+        return
+
+    def fix(kw: dict) -> dict:
+        if str(kw.get("hover_color", "")).lower() == accent:
+            kw["hover_color"] = hover
+        if str(kw.get("fg_color", "")).lower() == accent and "text_color" not in kw:
+            kw["text_color"] = inverse
+        return kw
+
+    original_init, original_configure = button.__init__, button.configure
+
+    def __init__(self, *args, **kw):
+        original_init(self, *args, **fix(kw))
+
+    def configure(self, require_redraw=False, **kw):
+        return original_configure(self, require_redraw=require_redraw, **fix(kw))
+
+    button.__init__, button.configure, button._mono_patched = __init__, configure, True
 
 
 def names() -> dict[str, str]:

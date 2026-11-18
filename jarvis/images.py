@@ -49,6 +49,12 @@ DEFAULT_QUALITY = "medium"
 MAX_PROMPT_CHARS = 4000
 
 POLLINATIONS_URL = "https://image.pollinations.ai/prompt/"
+# With a free key (sk_… or plln_…, enter.pollinations.ai/keys): POLLINATIONS_API_KEY.
+POLLINATIONS_KEYED_URL = "https://gen.pollinations.ai/image/"
+
+# FLUX.1 schnell on Cloudflare Workers AI: 3 s, on the Cloudflare chat token.
+CLOUDFLARE_MODEL = "@cf/black-forest-labs/flux-1-schnell"
+CLOUDFLARE_TIMEOUT = 60
 POLLINATIONS_TIMEOUT = 180  # Flux can be slow when the free tier is busy
 
 # FLUX.1-dev on NVIDIA. Free on the same key that drives Max mode, and a
@@ -123,17 +129,20 @@ class ImageGenerator:
         return path.with_name(f"{stem}-{datetime.now():%f}{suffix}")
 
     def _render(self, prompt: str, size: str, quality: str, seed: int = 0) -> bytes:
-        """Produce the image, best free backend first.
+        """Produce the image, the most reliable free backend first.
 
-        FLUX.1-dev on NVIDIA is a large step up from Pollinations and costs
-        nothing on a key most users already have for chat — measured at about
-        seven seconds for a 1024x1024. Pollinations stays as the backstop
-        because it is the only one that needs no account at all, which is what
-        makes image generation work on a fresh install.
+        Measured on 2026-11-18 (10.5.3):
+        - Cloudflare Workers AI, FLUX.1 schnell: 3 s, 10,000 free units a day
+          on the same token as Cloudflare chat. First, when it has a key.
+        - NVIDIA FLUX.1-dev: had failed every request since NVIDIA stopped
+          accepting a "seed" (422), so every image fell to Pollinations.
+        - Pollinations without a key now allows one image every 45 s per IP
+          (402) and answers 503 under load: the "free image service
+          unavailable" friends kept seeing. With a free key (sk_/plln_) it has its
+          own limits; without one it is the last resort, tried twice.
 
-        Gemini's image models are deliberately absent. They exist on the key
-        and return HTTP 429 with 'limit: 0' for the free tier, so offering
-        them would mean a button that never works.
+        Gemini's image models are deliberately absent: on free keys they
+        answer 429 to every request.
         """
         if self._use_openai():
             try:
@@ -143,15 +152,67 @@ class ImageGenerator:
                 # hand back an error, quietly produce the image for free.
                 pass
 
-        if get_image_provider() in {"auto", "nvidia", "flux"}:
-            nvidia = providers.BY_NAME.get("nvidia")
-            if nvidia is not None and providers.has_key(nvidia):
+        wanted = get_image_provider()
+        problems: list[str] = []
+        attempts = [
+            ("Cloudflare", {"auto", "cloudflare"}, self._cloudflare_ready, self._generate_cloudflare),
+            ("NVIDIA FLUX", {"auto", "nvidia", "flux"}, self._nvidia_ready, self._generate_flux),
+        ]
+        for label, names, ready, generate in attempts:
+            if wanted in names and ready():
                 try:
-                    return self._generate_flux(prompt, size, seed)
-                except ImageGenerationError:
-                    pass          # fall through to the always-available one
+                    return generate(prompt, size, seed)
+                except ImageGenerationError as exc:
+                    problems.append(f"{label}: {exc}")
+        try:
+            return self._generate_pollinations(prompt, size, seed)
+        except ImageGenerationError as exc:
+            problems.append(f"Pollinations: {exc}")
+        raise ImageGenerationError(
+            "No free image service could make it right now.\n"
+            + "\n".join(f"  • {p}" for p in problems)
+            + "\n\nThe reliable free fix: a Cloudflare token (Settings → Cloudflare Workers AI; 10,000 free "
+              "units a day, no card), or a free Pollinations key (Settings → Pollinations, from "
+              "enter.pollinations.ai/keys)."
+        )
 
-        return self._generate_pollinations(prompt, size, seed)
+    @staticmethod
+    def _cloudflare_ready() -> bool:
+        cloudflare = providers.BY_NAME.get("cloudflare")
+        return cloudflare is not None and providers.has_key(cloudflare)
+
+    @staticmethod
+    def _nvidia_ready() -> bool:
+        nvidia = providers.BY_NAME.get("nvidia")
+        return nvidia is not None and providers.has_key(nvidia)
+
+    def _generate_cloudflare(self, prompt: str, size: str, seed: int = 0) -> bytes:
+        """FLUX.1 schnell on Cloudflare Workers AI (1024×1024; it takes no size)."""
+        import json
+        import os
+
+        account = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        request = net.request(f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{CLOUDFLARE_MODEL}", {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.getenv('CLOUDFLARE_API_TOKEN', '').strip()}",
+        })
+        request.data = json.dumps({"prompt": prompt[:2048], "steps": 4, "seed": int(seed) % 2_147_483_647}).encode()
+        try:
+            with net.urlopen(request, timeout=CLOUDFLARE_TIMEOUT) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise ImageGenerationError("today's free allowance is used up (it resets daily)") from None
+            raise ImageGenerationError(f"HTTP {exc.code}") from None
+        except Exception as exc:
+            raise ImageGenerationError(f"unreachable ({exc})") from None
+        encoded = (body.get("result") or {}).get("image")
+        if not encoded:
+            raise ImageGenerationError("no image in the reply")
+        try:
+            return base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            raise ImageGenerationError("an image that couldn't be decoded") from None
 
     def _generate_flux(self, prompt: str, size: str, seed: int = 0) -> bytes:
         """FLUX.1-dev through NVIDIA's generative endpoint."""
@@ -159,9 +220,10 @@ class ImageGenerator:
         import os
 
         width, height = (1024, 1024) if size == "auto" else map(int, size.split("x"))
-        # The endpoint only accepts multiples of 64, and rejects the whole
-        # request rather than rounding.
-        width, height = (max(256, w - w % 64) for w in (width, height))
+        # It takes only 768–1344 in steps of 64 and rejects anything else
+        # outright; and since November 2026 it rejects "seed" too (422 on
+        # every request, so every image had fallen through to Pollinations).
+        width, height = (min(1344, max(768, w - w % 64)) for w in (width, height))
 
         payload = json.dumps({
             "prompt": prompt,
@@ -170,7 +232,6 @@ class ImageGenerator:
             "width": width,
             "height": height,
             "steps": 30,
-            "seed": int(seed) % 4_294_967_295,
         }).encode("utf-8")
 
         request = net.request(FLUX_URL, {
@@ -224,34 +285,41 @@ class ImageGenerator:
                 "seed": int(seed),
             }
         )
-        url = f"{POLLINATIONS_URL}{urllib.parse.quote(prompt, safe='')}?{query}"
+        import os
+        import time
 
-        try:
-            with net.urlopen(url, timeout=POLLINATIONS_TIMEOUT) as response:
-                data = response.read()
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                raise ImageGenerationError(
-                    "The free image service is rate limiting us — it allows "
-                    "roughly one image every 15 seconds. Wait a moment and try "
-                    "again."
-                ) from None
-            raise ImageGenerationError(
-                f"Free image service returned HTTP {exc.code}. Try again shortly."
-            ) from None
-        except (urllib.error.URLError, OSError) as exc:
-            explanation = net.describe_ssl_error(exc)
-            raise ImageGenerationError(
-                explanation
-                or f"Can't reach the image service: {exc}. Check your connection."
-            ) from None
+        key = os.getenv("POLLINATIONS_API_KEY", "").strip()
+        if key:
+            # The keyed service: its own limits, not the shared anonymous ones.
+            request = net.request(f"{POLLINATIONS_KEYED_URL}{urllib.parse.quote(prompt, safe='')}?{query}",
+                                  {"Authorization": f"Bearer {key}"})
+        else:
+            request = f"{POLLINATIONS_URL}{urllib.parse.quote(prompt, safe='')}?{query}"
+
+        data = b""
+        for attempt in range(2):
+            try:
+                with net.urlopen(request, timeout=POLLINATIONS_TIMEOUT) as response:
+                    data = response.read()
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code >= 500 and attempt == 0:
+                    time.sleep(3)          # 503 under load often clears in a moment
+                    continue
+                if exc.code in (402, 429):
+                    raise ImageGenerationError(
+                        "the free tier without a key allows one image every 45 seconds"
+                        if not key else "this key's limit is reached for now") from None
+                if exc.code == 401:
+                    raise ImageGenerationError("the Pollinations key was refused") from None
+                raise ImageGenerationError(f"HTTP {exc.code}, busy or down") from None
+            except (urllib.error.URLError, OSError) as exc:
+                explanation = net.describe_ssl_error(exc)
+                raise ImageGenerationError(explanation or f"unreachable ({exc})") from None
 
         if not self._looks_like_image(data):
             # The service answers errors with HTML/JSON at HTTP 200.
-            raise ImageGenerationError(
-                "The free image service returned an error instead of an image. "
-                "Try a different prompt, or wait a moment."
-            )
+            raise ImageGenerationError("it sent an error page instead of an image")
         return data
 
     # --- paid backend -----------------------------------------------------

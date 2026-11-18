@@ -87,6 +87,17 @@ NETWORK = Capability(
     "network", "Fetch something over the network",
     "JARVIS will download from the address shown.",
 )
+CONTROL_SCREEN = Capability(
+    "control_screen", "Let Cowork see your screen, click and type",
+    "Screenshots go to the AI provider that reads them (NVIDIA or Google, free tiers). "
+    "It never presses Submit, Send, Pay or anything like them — you do. "
+    "Push the mouse into the top-left corner to stop it at once.",
+)
+READ_MAIL = Capability(
+    "read_mail", "Let Cowork read your recent email",
+    "The messages go to an AI provider to be sorted and summarised. "
+    "Replies are only drafted: nothing is ever sent for you.",
+)
 CHANGE_SETTING = Capability(
     "change_setting", "Change a Windows setting",
     "Only the setting shown changes, and the same command switches it back.",
