@@ -66,7 +66,9 @@ def test_router_sorts_messages_into_tiers(text, tier):
 def test_router_tier_targets():
     from jarvis import modes
 
-    assert router.targets("light") == modes.targets_for(modes.LOW)
+    # 14.1.1: Qwen is Low's model only; Mid's short messages stay on Mercury.
+    assert router.targets("light") == modes.targets_for(modes.MID)
+    assert all("qwen" not in model for _, model in router.targets("light") + router.targets("heavy"))
     assert router.targets("standard") == ()
     assert router.targets("heavy")[0] == ("groq", "openai/gpt-oss-120b")
 
@@ -85,7 +87,7 @@ def test_brain_routes_in_mid_and_records_the_saving(base, monkeypatch):
 
     brain._chat_over_chain = chain
     assert brain.chat("hi") == "Hello!"
-    assert seen[-1] == modes.targets_for(modes.LOW) and brain.last_route == "light"
+    assert seen[-1] == modes.targets_for(modes.MID) and brain.last_route == "light"
     brain.chat("Traceback (most recent call last): KeyError 'x' in my python script")
     assert seen[-1][0] == ("groq", "openai/gpt-oss-120b") and brain.last_route == "heavy"
     data = router.stats()

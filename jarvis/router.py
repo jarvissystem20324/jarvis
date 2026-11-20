@@ -7,8 +7,8 @@ essay plan) need the big one. The router reads the message itself — no model
 call, so it costs nothing and adds no wait — and sorts it into one of three
 tiers:
 
-    light     short, simple, small talk      the Low mode's fast model
-    standard  everything else                Mid's own model
+    light     short, simple, small talk      Mid's own model (Inception Mercury)
+    standard  everything else                Mid's own model (Inception Mercury)
     heavy     code, maths, long reasoning    Groq gpt-oss-120b, then Gemini, then NVIDIA's 120B
 
 Only the order changes: if the tier's model is busy, the usual chain answers,
@@ -88,7 +88,9 @@ def classify(text: str) -> str:
 def targets(tier: str) -> tuple[tuple[str, str], ...]:
     """The (provider, model) pairs to try first for a tier."""
     if tier == "light":
-        return modes.targets_for(modes.LOW)
+        # Mid's own fast model (Inception Mercury), never Low's Qwen: Qwen is
+        # Low's model only, and Mid should feel like Mid on every message.
+        return modes.targets_for(modes.MID)
     if tier == "heavy":
         return modes.parse_targets(get_setting("JARVIS_ROUTER_HEAVY", HEAVY_DEFAULT))
     return ()  # standard: Mid's own model, which the mode tries anyway
@@ -161,8 +163,8 @@ def readout() -> str:
     tokens_out = sum(r["out"] for _, r in rows)
     saved = tokens_in / 1e6 * price_in + tokens_out / 1e6 * price_out
     lines = [head, f"{total} message(s) routed:"]
-    names = {"light": "Light (fast small model)", "standard": "Standard (Mid's model)",
-             "heavy": "Heavy (big model)"}
+    names = {"light": "Light (Mercury)", "standard": "Standard (Mercury)",
+             "heavy": "Heavy (gpt-oss-120b)"}
     for tier, row in rows:
         avg = row["seconds"] / row["count"] if row["count"] else 0
         share = 100 * row["count"] / total
