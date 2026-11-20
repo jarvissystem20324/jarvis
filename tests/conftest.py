@@ -42,6 +42,64 @@ os.environ["JARVIS_UPDATE_URL"] = "off"
 os.environ["JARVIS_AUTO_COMMANDS"] = "off"
 
 
+@pytest.fixture(autouse=True)
+def _windows_stay_out_of_sight(monkeypatch):
+    """Test windows are real windows; they must never appear over the developer's work.
+
+    Every window a test makes is fully transparent (which also lets clicks pass
+    through), kept far off-screen, and may not take the keyboard from whatever
+    the developer is typing in. Their sizes and contents are unchanged, so the
+    tests still measure and drive them exactly as before.
+    """
+    import re
+    import tkinter
+
+    hidden = "+-32000+-32000"
+
+    def hide(window) -> None:
+        try:
+            window.wm_attributes("-alpha", 0.0)
+            window.wm_geometry(hidden)
+        except tkinter.TclError:
+            pass
+
+    def wrap_init(cls):
+        original = cls.__init__
+
+        def __init__(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            hide(self)
+
+        monkeypatch.setattr(cls, "__init__", __init__)
+
+    wrap_init(tkinter.Tk)
+    wrap_init(tkinter.Toplevel)
+    original_geometry = tkinter.Wm.wm_geometry
+
+    def wm_geometry(self, new=None):
+        if new:
+            size = re.match(r"^\d+x\d+", str(new))
+            new = (size.group(0) if size else "") + hidden
+        return original_geometry(self, new)
+
+    monkeypatch.setattr(tkinter.Wm, "wm_geometry", wm_geometry)
+    monkeypatch.setattr(tkinter.Wm, "geometry", wm_geometry)
+    original_attributes = tkinter.Wm.wm_attributes
+
+    def wm_attributes(self, *args, **kwargs):
+        # A test can't make a window opaque or always-on-top.
+        args = list(args)
+        for i, value in enumerate(args[:-1]):
+            if value in ("-alpha", "-topmost"):
+                args[i + 1] = 0.0 if value == "-alpha" else False
+        return original_attributes(self, *args, **kwargs)
+
+    monkeypatch.setattr(tkinter.Wm, "wm_attributes", wm_attributes)
+    monkeypatch.setattr(tkinter.Wm, "attributes", wm_attributes)
+    monkeypatch.setattr(tkinter.Misc, "focus_force", tkinter.Misc.focus_set)
+    yield
+
+
 def fake_key(prefix: str, body: str = "AbCdEf0123456789AbCdEf0123456789") -> str:
     """A credential-shaped string that is obviously not a credential.
 

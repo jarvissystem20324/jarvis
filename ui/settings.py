@@ -426,6 +426,14 @@ class SettingsWindow(ctk.CTkToplevel):
             menu.pack(side="left")
             self.choices[env_name] = (menu, {v: k for k, v in switch.items()})
 
+        # 14.1: Advanced mode — the full code editor instead of the simple Claude Code–style box.
+        row = self._labelled(parent, "Advanced mode")
+        menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+        menu.set("On" if self.original.get("JARVIS_ADVANCED", "off").strip().lower() in {"on", "1", "true", "yes"}
+                 else "Off")
+        menu.pack(side="left")
+        self.choices["JARVIS_ADVANCED"] = (menu, {v: k for k, v in switch.items()})
+
         # 13.4.2: previews first, and the smart router.
         row = self._labelled(parent, "Updates")
         menu = ctk.CTkOptionMenu(row, values=["Stable", "Get previews"], width=140)

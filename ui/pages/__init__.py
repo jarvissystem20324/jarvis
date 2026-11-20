@@ -68,10 +68,21 @@ BY_KEY = {p.key: p for p in PAGES}
 STILL_BUILDING: set[str] = set()
 
 
+def advanced() -> bool:
+    """14.1: Settings → Advanced mode. Off: the Code tab is the simple, Claude Code–style box."""
+    from jarvis.config import get_setting
+
+    return get_setting("JARVIS_ADVANCED", "off").strip().lower() in {"on", "1", "true", "yes"}
+
+
 def page_class(key: str):
     """The class that draws page `key`; raises if it cannot be imported."""
     import importlib
 
+    if key == "code" and not advanced():
+        from ui.pages.codesimple import SimpleCodePage
+
+        return SimpleCodePage
     module_name, _, class_name = BY_KEY[key].target.partition(":")
     return getattr(importlib.import_module(module_name), class_name)
 

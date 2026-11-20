@@ -18,6 +18,7 @@ def _display_available() -> bool:
         import tkinter
 
         root = tkinter.Tk()
+        root.withdraw()          # a check, not a window: never shown
         root.destroy()
         return True
     except Exception:

@@ -91,7 +91,8 @@ from tests.test_gui import _display_available, app  # noqa: E402,F401
 
 
 @pytest.mark.skipif(not _display_available(), reason="no display")
-def test_the_coding_page_opens_edits_and_highlights(app, tmp_path):
+def test_the_coding_page_opens_edits_and_highlights(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_ADVANCED", "on")       # 14.1: the full editor is Advanced mode
     (tmp_path / "main.py").write_text("def hello():\n    return 'hi'  # greet\n", encoding="utf-8")
     app._show_tab("code")
     app.update()

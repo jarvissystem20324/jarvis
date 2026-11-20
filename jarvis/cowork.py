@@ -145,11 +145,11 @@ def find_url(goal: str) -> str:
 def find_paths(goal: str) -> list[Path]:
     out = []
     for match in _WIN_PATH.finditer(goal or ""):
-        raw = match.group(1).strip().rstrip(".,;")
+        raw = match.group(1).strip().rstrip(".,;)")
         # A path may run into the next words ("C:\Offers and make a table"): try shorter.
         words = raw.split(" ")
         for cut in range(len(words), 0, -1):
-            candidate = Path(" ".join(words[:cut]).rstrip(".,;"))
+            candidate = Path(" ".join(words[:cut]).rstrip(".,;)"))
             if candidate.exists():
                 out.append(candidate)
                 break

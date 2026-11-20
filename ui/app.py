@@ -382,13 +382,33 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         input_row.grid(row=1, column=1, sticky="ew", padx=16, pady=(0, 16))
         input_row.grid_columnconfigure(0, weight=1)
 
+        # 14.1: a "+" beside the box, like Claude's — a picture is analysed, any other file opened.
+        entry_box = ctk.CTkFrame(input_row, fg_color="transparent")
+        entry_box.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.plus_btn = ctk.CTkButton(entry_box, text="+", width=44, height=44, font=ctk.CTkFont(size=20),
+                                      fg_color=COLORS["panel"], hover_color=COLORS["accent_dim"],
+                                      text_color=COLORS["text"], command=self._choose_file)
+        self.plus_btn.pack(side="left", padx=(0, 6))
         self.chat_input = ctk.CTkEntry(
-            input_row,
+            entry_box,
             placeholder_text="Ask JARVIS anything... (/image prompt to generate)",
             height=44,
             font=ctk.CTkFont(size=14),
         )
-        self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.chat_input.pack(side="left", fill="x", expand=True)
+
+        # Cowork's folder: the job works on it (shown while Cowork is on).
+        self._cowork_folder = ""
+        self.cowork_bar = ctk.CTkFrame(input_row, fg_color="transparent")
+        self.cowork_bar.grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
+        self.cowork_folder_btn = ctk.CTkButton(
+            self.cowork_bar, text="📁  Choose a folder  ▾", height=28, width=0, font=ctk.CTkFont(size=12),
+            fg_color="transparent", border_width=1, border_color=COLORS["accent_dim"], text_color=COLORS["text"],
+            hover_color=COLORS["accent_dim"], command=self._choose_cowork_folder)
+        self.cowork_folder_btn.pack(side="left")
+        ctk.CTkLabel(self.cowork_bar, text="  💻 This computer", font=ctk.CTkFont(size=12),
+                     text_color=COLORS["muted"]).pack(side="left", padx=(8, 0))
+        self.cowork_bar.grid_remove()
         self.chat_input.bind("<Return>", lambda e: self._send_chat())
         self.chat_input.bind("<Up>", self._recall_last)
 
@@ -494,7 +514,19 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             pass
         if self._cowork_on:
             self.show_cowork_panel(True)
+            self.cowork_bar.grid()
+        else:
+            self.cowork_bar.grid_remove()
         self.chat_input.focus_set()
+
+    def _choose_cowork_folder(self) -> None:
+        """File Explorer's folder picker; the next Cowork jobs work on that folder."""
+        from tkinter import filedialog
+
+        chosen = filedialog.askdirectory(title="Choose the folder Cowork works on", parent=self)
+        if chosen:
+            self._cowork_folder = str(Path(chosen))
+            self.cowork_folder_btn.configure(text=f"📁  {Path(chosen).name or chosen}  ▾")
 
     def show_cowork_panel(self, show: bool = True) -> None:
         panel = getattr(self, "cowork_panel", None)
@@ -519,6 +551,9 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
 
     def start_cowork(self, goal: str) -> None:
         """Start a job from the window: the switch, the panel's Retry, or a command."""
+        folder = getattr(self, "_cowork_folder", "")
+        if folder and folder.lower() not in goal.lower():
+            goal = f"{goal} (folder: {folder})"
         try:
             job = cowork.manager.start(goal)
         except cowork.JobError as exc:
@@ -1485,6 +1520,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
     def page(self, key: str):
         """A 10.0 page, created the first time it is asked for."""
         page = self.pages.get(key)
+        if page is not None and key == "code":
+            # Advanced mode changed in Settings: draw the other Code tab.
+            from ui.pages import page_class
+
+            if type(page) is not page_class("code"):
+                page.destroy()
+                page = self.pages[key] = None
         if page is None:
             from ui.pages import make
 
@@ -2015,6 +2057,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             self._run_text(f"/doc {path}")
         elif suffix in {".csv", ".tsv", ".xlsx", ".xlsm"}:
             self._run_text(f"/data {path}")
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"} and self.active_tab == "chat":
+            # 14.1: a picture sent to the chat is analysed there.
+            self.current_image = path
+            self.jarvis.current_image = path
+            self._run_text(f"/analyze {path}")
         elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
             self.current_image = path
             self.jarvis.current_image = path
@@ -2027,7 +2074,9 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
     def _choose_file(self) -> None:
         from tkinter import filedialog
 
-        chosen = filedialog.askopenfilename(title="Send a file to JARVIS")
+        chosen = filedialog.askopenfilename(title="Send a file or picture to JARVIS", parent=self, filetypes=[
+            ("Pictures and files", "*.png *.jpg *.jpeg *.webp *.gif *.bmp *.pdf *.docx *.txt *.md *.csv *.xlsx"),
+            ("All files", "*.*")])
         if chosen:
             self._attach(Path(chosen))
 

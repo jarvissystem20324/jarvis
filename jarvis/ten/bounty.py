@@ -108,6 +108,33 @@ class Bounty:
         self.current_image = path
         return JarvisResponse(text=f"🔍 Upscaled {factor}× → {path}", image_path=path, image_paths=[path])
 
+    @command("analyze", "analyse", "imageanalysis", group="Chat and AI", usage="/analyze [image] | [question]",
+             help="image analysis: what's in a picture, its text, what matters (charts, forms, errors) — and your "
+                  "question answered", title="Analyse an image", icon="🔍", page="media",
+             fields=(field("image", "file", "Picture (blank: the last one)", optional=True),
+                     field("question", "text", "Question (optional)", optional=True,
+                           hint="what does this chart show? · what's wrong here?")),
+             keywords="image picture photo analyse vision describe screenshot chart")
+    def analyze_cmd(self, args: str, routed: bool = False):
+        from .. import vision
+        from ..assistant import JarvisResponse
+        from ..registry import split_free
+
+        target, question = split_free(args, 2)
+        target = target.strip().strip('"')
+        path = Path(target) if target and Path(target).is_file() else None
+        if path is None:
+            question = f"{target} {question}".strip() if target else question
+            path = getattr(self, "current_image", None)
+        if path is None or not Path(path).is_file():
+            return "Give me a picture: press + next to the message box, drop one in, or /analyze C:\\…\\photo.jpg"
+        try:
+            text = vision.analyse(self.brain, Path(path), question)
+        except vision.VisionError as exc:
+            return str(exc)
+        self.current_image = Path(path)
+        return JarvisResponse(text=text, image_path=Path(path), image_paths=[Path(path)])
+
     @command("nudges", "briefings", group=G, usage="/nudges [on|off]",
              help="proactive briefings: at most three useful nudges a day, never at night",
              title="Proactive nudges", icon="💡", page="today",
