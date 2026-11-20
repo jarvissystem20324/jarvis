@@ -612,6 +612,13 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
         if self._agent is None:
             self._agent = agent.Agent(self)
 
+        if wanted.lower() in {"forget", "reset", "new chat", "clear memory"}:
+            addon = self._project_addon()
+            self._agent.root = getattr(addon, "root", None) if addon else None
+            if self._agent.root is None:
+                return "No project is open, so there is nothing to forget."
+            return self._agent.forget()
+
         try:
             plan = self._agent.make_plan(wanted)
         except agent.AgentError as exc:
@@ -635,6 +642,15 @@ class Jarvis(Everyday, Extras, Toolkit, Eight):
             return f"The run stopped: {exc}"
         security.audit.record("agent done", wanted[:120])
         return report
+
+    def code_question(self, question: str) -> str:
+        """A question in the Code tab: answered with the project and the agent's memory."""
+        if self._agent is None:
+            self._agent = agent.Agent(self)
+        try:
+            return self._agent.answer(question)
+        except agent.AgentError as exc:
+            return str(exc)
 
     def agent_undo(self) -> str:
         if self._agent is None:

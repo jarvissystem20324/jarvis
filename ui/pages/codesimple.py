@@ -19,8 +19,8 @@ import customtkinter as ctk
 from ui import prefs
 from ui.pages.base import Page, label
 
-EXAMPLES = ("Explain what this project does", "Find and fix the bug in my last error",
-            "Add a dark mode to the website", "Write tests for the main file")
+EXAMPLES = ("Make a to-do list website from scratch", "Now add a dark mode to it",
+            "Explain what this project does", "Write tests for the main file")
 
 
 class SimpleCodePage(Page):
@@ -65,15 +65,22 @@ class SimpleCodePage(Page):
                                         fg_color="transparent", hover_color=c["accent_dim"], text_color=c["text"],
                                         command=self.choose_folder)
         self.folder_btn.pack(side="left")
+        # The agent remembers earlier tasks in this folder; this starts over.
+        self.new_btn = ctk.CTkButton(chips, text="＋  New chat", height=28, width=0, font=ctk.CTkFont(size=12),
+                                     fg_color="transparent", hover_color=c["accent_dim"], text_color=c["text"],
+                                     command=self.new_chat)
+        self.new_btn.pack(side="left", padx=(12, 0))
         label(chips, "Full editor: Settings → Advanced mode", size=11, muted=True).pack(side="right", padx=6)
         self._show_folder()
 
     # --- the welcome ----------------------------------------------------------------------
     def _welcome(self) -> None:
         self._write("Code with JARVIS\n\n", "title")
-        self._write("1. Click the folder under the box and pick your project.\n"
-                    "2. Say what you want — build, fix, explain or test.\n"
-                    "3. JARVIS shows its plan and asks before changing anything. /undo puts files back.\n\n"
+        self._write("1. Click the folder under the box and pick your project — an empty folder is fine.\n"
+                    "2. Say what you want — build something from scratch, fix, explain or test.\n"
+                    "3. JARVIS shows its plan and asks before changing anything. /undo puts files back.\n"
+                    "It remembers what you asked before in this folder, so “now make it blue” works. "
+                    "“＋ New chat” starts over.\n\n"
                     "Try: " + " · ".join(f"“{e}”" for e in EXAMPLES) + "\n\n", "muted")
 
     def _write(self, text: str, tag: str = "") -> None:
@@ -121,6 +128,16 @@ class SimpleCodePage(Page):
             self.run(lambda: self.app.jarvis.process(f"/project {self.folder}"))
         self.after(50, self.entry.focus_set)
 
+    def new_chat(self) -> None:
+        if not self.folder:
+            return
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+        self._welcome()
+        self.run(lambda: self.app.jarvis.process("/agent forget").text,
+                 lambda text: self._write(f"{text}\n\n", "muted"))
+
     # --- asking --------------------------------------------------------------------------------
     def _attach(self) -> None:
         chosen = filedialog.askopenfilename(title="Add a file to the task", parent=self,
@@ -152,10 +169,14 @@ class SimpleCodePage(Page):
         # A question about the code is answered; anything else is a job for the agent.
         is_question = task.rstrip().endswith("?") or task.lower().startswith(
             ("what", "why", "how", "where", "explain", "ne ", "neden", "nasıl"))
-        command = task if task.startswith("/") else (task if is_question else f"/agent {task}")
+        jarvis = self.app.jarvis
 
         def work():
-            return self.app.jarvis.process(command).text
+            if task.startswith("/"):
+                return jarvis.process(task).text
+            if is_question:
+                return jarvis.code_question(task)
+            return jarvis.process(f"/agent {task}").text
 
         def done(text):
             self.send.configure(state="normal")

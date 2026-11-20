@@ -71,9 +71,30 @@ Rules:
   cannot do is decide later to touch a file this plan does not list.
 - You are given the actual failure output when there is one, so plan
   against what really happened rather than describing a loop.
+- Building from nothing is normal. If the folder is empty, or the user asks
+  for a new app, game, website, script or tool, plan "write" steps that
+  create every file it needs (no "read" step for a file that does not exist
+  yet) and finish with a README.md saying how to run it. Pick a sensible
+  stack yourself when the user doesn't name one; plain HTML/CSS/JS or a
+  single Python file is best for a beginner.
+- Do what the user asked. Don't refuse an ordinary coding task, and don't
+  shrink it into a stub: write working code.
+- "Earlier in this conversation" is what the user and you already did in
+  this folder. Use it: "make it blue" or "add a score" means the thing you
+  built before, so read and change those files.
 - If the request is unclear or cannot be done with these actions, return
   {"goal": "...", "steps": [], "risk": "why this cannot be planned"}.
 """
+
+# How many earlier tasks the agent keeps in mind, per project folder. Saved,
+# so closing JARVIS doesn't make it forget what it built.
+MEMORY_TURNS = 12
+MEMORY_KEEP = 40
+
+ANSWER_PROMPT = """You are JARVIS's coding assistant, answering a question about
+the user's project. Answer plainly and briefly, for a beginner. Use the
+project layout, the files shown and the earlier conversation; if you need a
+file you can't see, say which one. Don't invent files that aren't there."""
 
 WORKER_PROMPT = """You are carrying out one step of an approved plan.
 
@@ -209,6 +230,8 @@ class Agent:
     def __init__(self, jarvis):
         self.jarvis = jarvis
         self.plan: Plan | None = None
+        # What the user typed for the current task, word for word.
+        self.task = ""
         # Every model that did some of the work, in order, for the report.
         self.models_used: list[str] = []
         # Why the agent's own model (Claude Opus 4.6 by default) was passed over.
@@ -253,24 +276,107 @@ class Agent:
                 "Open one with /project <folder>, then try again."
             )
 
-        layout = addon._tree_text(limit=40) if addon else ""
+        layout = (addon._tree_text(limit=40) if addon else "") or "  (empty folder: nothing here yet, build from scratch)"
         self.models_used = []
         self.fallback_note = ""
+        self.task = goal
         answer = self._ask(
             f"{PLANNER_PROMPT}\n\nProject: {self.root}\n"
-            f"Layout:\n{layout}\n\nTask: {goal}"
+            f"Layout:\n{layout}\n\n{self.memory_text()}Task: {goal}"
         )
         plan = parse_plan(answer)
         plan.model = self.models_used[-1] if self.models_used else ""
         if self.fallback_note:
             plan.model += f"\n  ({self.fallback_note})"
         if not plan.steps:
+            self.remember(goal, f"Couldn't plan it: {plan.risk or plan.goal}"[:300])
             raise AgentError(
                 f"I couldn't turn that into a plan.\n\n{plan.risk or plan.goal}"
             )
         _will, plan.where = self.branch_plan()
         self.plan = plan
         return plan
+
+    # --- memory -----------------------------------------------------------
+    # Each task used to start from nothing, so "now make it blue" had no "it".
+    # The agent keeps the last tasks per project folder — what was asked, what
+    # it did, which files — and gives them to every plan, write and answer.
+
+    @staticmethod
+    def _store():
+        from . import kit
+
+        return kit.Store("agent_memory.json", {})
+
+    def _key(self) -> str:
+        return str(self.root or "").lower()
+
+    def memory(self) -> list[dict]:
+        if self.root is None:
+            return []
+        rows = self._store().load().get(self._key(), [])
+        return [r for r in rows if isinstance(r, dict)]
+
+    def remember(self, task: str, result: str, files: list[str] | None = None) -> None:
+        if self.root is None:
+            return
+        store = self._store()
+        data = store.load()
+        rows = [r for r in data.get(self._key(), []) if isinstance(r, dict)]
+        rows.append({"task": task[:600], "result": result[:600], "files": (files or [])[:30]})
+        data[self._key()] = rows[-MEMORY_KEEP:]
+        try:
+            store.save(data)
+        except OSError:
+            pass
+
+    def forget(self) -> str:
+        store = self._store()
+        data = store.load()
+        gone = len(data.pop(self._key(), []) or [])
+        try:
+            store.save(data)
+        except OSError:
+            pass
+        return f"Forgot {gone} earlier task(s) for this folder. Starting fresh."
+
+    def memory_text(self) -> str:
+        rows = self.memory()[-MEMORY_TURNS:]
+        if not rows:
+            return ""
+        lines = ["Earlier in this conversation (oldest first):"]
+        for row in rows:
+            files = f" [files: {', '.join(row.get('files') or [])}]" if row.get("files") else ""
+            lines.append(f"- User: {row.get('task', '')}\n  You: {row.get('result', '')}{files}")
+        return "\n".join(lines) + "\n\n"
+
+    def answer(self, question: str) -> str:
+        """Answer a question about the open project, remembering the talk."""
+        addon = self._code_addon()
+        self.root = getattr(addon, "root", None) if addon else None
+        if self.root is None:
+            raise AgentError("No project is open. Choose a folder first.")
+        layout = addon._tree_text(limit=40) or "  (empty folder)"
+        shown = []
+        # Files the question names, and the files the last task wrote, so
+        # "how do I run it?" sees the thing it built.
+        recent = [f for row in self.memory()[-2:] for f in row.get("files") or []]
+        named = re.findall(r"[\w./\\-]+\.\w{1,6}", question)
+        for rel in list(dict.fromkeys(named + recent))[:4]:
+            try:
+                path = self._resolve(rel)
+                if path.is_file():
+                    shown.append(f"--- {rel} ---\n{path.read_text(encoding='utf-8', errors='replace')[:12000]}")
+            except (AgentError, OSError):
+                continue
+        self.models_used, self.fallback_note = [], ""
+        reply = self._ask(
+            f"{ANSWER_PROMPT}\n\nProject: {self.root}\nLayout:\n{layout}\n\n"
+            + ("\n\n".join(shown) + "\n\n" if shown else "")
+            + f"{self.memory_text()}Question: {question}"
+        )
+        self.remember(question, reply.strip()[:600])
+        return reply
 
     def _ask(self, prompt: str) -> str:
         """One model call, on the agent's own model when it answers.
@@ -477,8 +583,11 @@ class Agent:
         self.last_branch = None
         branch = self._start_branch()
         report = self._run_steps(on_progress, should_continue)
+        files = [s.target for s in self.plan.steps if s.action == "write" and s.status == "done"]
         if branch is not None:
             report += "\n\n" + self._finish_branch(*branch)
+        self.remember(getattr(self, "task", "") or self.plan.goal,
+                      f"{self.plan.goal} — {report.splitlines()[0] if report else 'done'}", files)
         return report
 
     def _run_steps(self, on_progress=None, should_continue=None) -> str:
@@ -548,10 +657,14 @@ class Agent:
             )
         path = self._resolve(step.target)
 
+        others = [w for w in self.plan.writes if w != step.target]
         answer = self._ask(
-            f"{WORKER_PROMPT}\n\nGoal: {self.plan.goal}\n"
+            f"{WORKER_PROMPT}\n\nWhat the user asked: {getattr(self, 'task', '') or self.plan.goal}\n"
+            f"Goal: {self.plan.goal}\n"
             f"This step: {step.why or 'update ' + step.target}\n"
-            f"File to produce: {step.target}\n\n"
+            f"File to produce: {step.target}\n"
+            + (f"Other files in this plan (make them fit together): {', '.join(others)}\n" if others else "")
+            + "\n" + self.memory_text()
             + "\n\n".join(context[-4:])
         )
         addon = self._code_addon()
