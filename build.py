@@ -31,6 +31,15 @@ def ensure_icon() -> None:
     if (ROOT / "assets" / "jarvis.ico").exists():
         return
     print("Generating assets/jarvis.ico ...")
+    try:
+        # 14.3: the new mark, drawn by ui/logo.py.
+        sys.path.insert(0, str(ROOT))
+        from ui import logo as new_logo
+
+        new_logo.write_assets(ROOT)
+        return
+    except Exception as exc:
+        print(f"  (the new logo failed: {exc}; drawing the old one)")
     from PIL import Image, ImageDraw, ImageFont
 
     def logo(size: int) -> Image.Image:
@@ -53,6 +62,42 @@ def ensure_icon() -> None:
     sizes = [16, 24, 32, 48, 64, 128, 256]
     (ROOT / "assets").mkdir(exist_ok=True)
     logo(256).save(ROOT / "assets" / "jarvis.ico", sizes=[(s, s) for s in sizes])
+
+
+def merge_env(source: Path, target: Path) -> int:
+    """Fill dist/.env from the project's .env without ever replacing a value.
+
+    It used to be a plain copy, which wiped every key saved through the EXE's
+    own Settings (an OpenRouter key, lost on every rebuild). Now a setting is
+    only written when dist/.env lacks it or has it empty. Returns how many.
+    """
+    import re
+
+    if not target.exists():
+        shutil.copy2(source, target)
+        return -1
+    pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+    have: dict[str, str] = {}
+    lines = target.read_text(encoding="utf-8-sig").splitlines()
+    for line in lines:
+        match = pattern.match(line)
+        if match:
+            have[match.group(1)] = match.group(2).strip()
+    added = 0
+    for line in source.read_text(encoding="utf-8-sig").splitlines():
+        match = pattern.match(line)
+        if not match or not match.group(2).strip():
+            continue
+        name, value = match.group(1), match.group(2)
+        if name not in have:
+            lines.append(f"{name}={value}")
+            added += 1
+        elif not have[name]:
+            lines = [f"{name}={value}" if pattern.match(row) and pattern.match(row).group(1) == name else row
+                     for row in lines]
+            added += 1
+    target.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    return added
 
 
 def stamp_version() -> str:
@@ -79,8 +124,8 @@ def main() -> int:
             return 1
         env_file = ROOT / ".env"
         if env_file.exists():
-            shutil.copy2(env_file, DIST / ".env")
-            print("Copied .env next to dist/JARVIS.exe for local testing.")
+            added = merge_env(env_file, DIST / ".env")
+            print(f"Merged .env next to dist/JARVIS.exe ({added} setting(s) filled in; nothing replaced).")
         if not verify_build(DIST / "JARVIS.exe"):
             return 1
 

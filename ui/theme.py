@@ -185,6 +185,36 @@ def patch_monochrome_buttons(ctk, palette: dict[str, str]) -> None:
     button.__init__, button.configure, button._mono_patched = __init__, configure, True
 
 
+def round_everything(ctk) -> None:
+    """14.3: round buttons and soft corners on every widget, in one place.
+
+    customtkinter clamps a radius to half the widget's height, so 999 makes
+    every button a pill whatever its size. A button that asks for a small
+    radius (the old 6-8 px look) is rounded too; 0 is kept, since that is a
+    deliberate flat strip, not a leftover default.
+    """
+    theme = ctk.ThemeManager.theme
+    for name, radius in (("CTkButton", 999), ("CTkOptionMenu", 999), ("CTkSegmentedButton", 999),
+                         ("CTkEntry", 14), ("CTkComboBox", 14), ("CTkTextbox", 14), ("CTkFrame", 12),
+                         ("CTkCheckBox", 7), ("CTkProgressBar", 999), ("CTkSlider", 999)):
+        try:
+            theme[name]["corner_radius"] = radius
+        except (KeyError, TypeError):
+            pass
+    button = ctk.CTkButton
+    if getattr(button, "_round_patched", False):
+        return
+    original_init = button.__init__
+
+    def __init__(self, *args, **kw):
+        radius = kw.get("corner_radius")
+        if isinstance(radius, (int, float)) and 0 < radius < 10:
+            kw["corner_radius"] = 999
+        original_init(self, *args, **kw)
+
+    button.__init__, button._round_patched = __init__, True
+
+
 def names() -> dict[str, str]:
     return {key: value["label"] for key, value in THEMES.items()}
 

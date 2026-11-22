@@ -112,6 +112,30 @@ class CoworkCommands:
             router.reset()
         return router.readout()
 
+    @command("agentteam", "agentteams", "teammode", group="Coding", usage="/agentteam [on|off]",
+             help="agent teams: a lead agent writes the code and teammates check it — picked for your mode",
+             title="Agent teams", icon="👥", page="code",
+             fields=(field("action", "choice", "Turn", "show", ("show", "on", "off")),),
+             keywords="agent team lead reviewer checker sub-agent subagent")
+    def agentteam_cmd(self, args: str, routed: bool = False):
+        from .. import teams
+
+        word = args.strip().lower()
+        if word in {"on", "off"}:
+            self._write_setting(teams.SETTING, word)
+        mode = getattr(getattr(self.brain, "mode", None), "name", "mid")
+        team = teams.team_for(mode)
+        state = "on" if teams.enabled() else "off"
+        lines = [f"👥 Agent teams: {state}."]
+        if state == "on":
+            lines += [f"In {mode.title()} mode: {team.describe()}.",
+                      "The lead writes each file, the checkers read it against what you asked, and the lead fixes "
+                      "what they find before moving on. Change mode and the team changes with it."]
+        else:
+            lines.append("Turn on with /agentteam on: a lead agent writes, sub-agents check its work. JARVIS "
+                         "picks the models for your mode.")
+        return "\n".join(lines)
+
     @command("askdocs", "companydocs", "askfolder", group=G, usage="/askdocs <folder> | <question>",
              help="ask a question across a folder of documents (PDF, Word, Excel, PowerPoint) — answered with "
                   "sources", title="Ask company documents", icon="🗂", page="documents",

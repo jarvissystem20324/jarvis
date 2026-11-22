@@ -134,6 +134,8 @@ class Plan:
     # Which provider and model wrote this plan. Shown before approval,
     # because the model that plans is the one the code is sent to.
     model: str = ""
+    # 14.3: the agent team doing the work, when teams are on.
+    team: str = ""
 
     @property
     def writes(self) -> list[str]:
@@ -169,6 +171,8 @@ class Plan:
             lines += ["", f"Where: {self.where}"]
         if self.model:
             lines += [f"Model: {self.model}"]
+        if self.team:
+            lines += [f"Team: {self.team}"]
         if self.risk:
             lines += ["", f"Risk: {self.risk}"]
         return "\n".join(lines)
@@ -232,6 +236,12 @@ class Agent:
         self.plan: Plan | None = None
         # What the user typed for the current task, word for word.
         self.task = ""
+        # (file, unified diff) for every file the last run wrote.
+        self.changes: list[tuple[str, str]] = []
+        # Each file's contents before this run touched it (None: it was new).
+        self._originals: dict[str, str | None] = {}
+        # (file, teams.Review) from the checkers, when agent teams is on.
+        self.reviews: list = []
         # Every model that did some of the work, in order, for the report.
         self.models_used: list[str] = []
         # Why the agent's own model (Claude Opus 4.6 by default) was passed over.
@@ -294,6 +304,9 @@ class Agent:
                 f"I couldn't turn that into a plan.\n\n{plan.risk or plan.goal}"
             )
         _will, plan.where = self.branch_plan()
+        team = self._team()
+        if team is not None:
+            plan.team = team.describe()
         self.plan = plan
         return plan
 
@@ -388,9 +401,14 @@ class Agent:
         from . import modes
 
         brain = self.jarvis.brain
+        targets = modes.agent_targets()
+        # 14.3: with agent teams on, the mode's team lead does the work.
+        team = self._team()
+        if team is not None:
+            targets = tuple(dict.fromkeys(team.lead + targets))
         try:
             answer = brain.ask_once(
-                prompt, targets=modes.agent_targets(), target_timeout=modes.AGENT_TIMEOUT
+                prompt, targets=targets, target_timeout=modes.AGENT_TIMEOUT
             )
         except TypeError:
             # A brain without per-call targets (the tests' stand-in).
@@ -399,7 +417,7 @@ class Agent:
         if used:
             self.models_used.append(used)
         # Say why the chosen model did not do the work, once, in plain words.
-        wanted = modes.agent_targets()
+        wanted = targets
         if wanted and used and not any(model in used for _p, model in wanted) and not self.fallback_note:
             reasons = [p for p in getattr(brain, "last_problems", []) or []
                        if any(model in p for _p, model in wanted)]
@@ -581,6 +599,9 @@ class Agent:
             raise AgentError("There is no approved plan to run.")
 
         self.last_branch = None
+        self.changes = []
+        self._originals = {}
+        self.reviews = []
         branch = self._start_branch()
         report = self._run_steps(on_progress, should_continue)
         files = [s.target for s in self.plan.steps if s.action == "write" and s.status == "done"]
@@ -667,6 +688,18 @@ class Agent:
             + "\n" + self.memory_text()
             + "\n\n".join(context[-4:])
         )
+        body = self._extract(answer, step)
+        self._refuse_blanking(path, step, body)
+        self._save(step, path, body)
+        step.detail = f"{len(body.splitlines())} lines"
+        # 14.3: with agent teams on, teammates check the file before moving on.
+        team = self._team()
+        if team is not None and team.checkers:
+            body = self._team_review(team, step, path, body)
+        return f"--- {step.target} (now written) ---\n{body[:20000]}"
+
+    def _extract(self, answer: str, step: Step) -> str:
+        """The file's new contents from a model's reply."""
         addon = self._code_addon()
         blocks = addon._blocks(answer) if addon else []
 
@@ -686,28 +719,51 @@ class Agent:
                 f"I couldn't produce new contents for {step.target}. "
                 f"It said:\n{answer[:300]}"
             )
-        if not body.strip():
-            # An empty file is a real thing — tests/__init__.py exists to be
-            # empty. Creating one is fine; emptying a file that currently has
-            # something in it is almost always a mistake, so that is refused.
-            existing = ""
-            if path.exists():
-                try:
-                    existing = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    existing = ""
-            if existing.strip():
-                raise AgentError(
-                    f"It produced an empty {step.target}, which currently has "
-                    f"{len(existing.splitlines())} lines in it. Refusing to "
-                    "blank an existing file."
-                )
+        return body
 
+    @staticmethod
+    def _refuse_blanking(path: Path, step: Step, body: str) -> None:
+        if body.strip():
+            return
+        # An empty file is a real thing — tests/__init__.py exists to be
+        # empty. Creating one is fine; emptying a file that currently has
+        # something in it is almost always a mistake, so that is refused.
+        existing = ""
+        if path.exists():
+            try:
+                existing = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                existing = ""
+        if existing.strip():
+            raise AgentError(
+                f"It produced an empty {step.target}, which currently has "
+                f"{len(existing.splitlines())} lines in it. Refusing to "
+                "blank an existing file."
+            )
+
+    def _save(self, step: Step, path: Path, body: str) -> None:
+        """Write the file: backed up the first time this run touches it, so a
+        teammate's fix on top still undoes back to your original."""
+        import difflib
         import shutil
         from datetime import datetime
 
+        first = step.target not in self._originals
+        if first:
+            try:
+                self._originals[step.target] = (path.read_text(encoding="utf-8", errors="replace")
+                                                if path.exists() else None)
+            except OSError:
+                self._originals[step.target] = ""
+        before = self._originals[step.target]
+        # 14.3: what changed, line by line, for the Code tab's Changes panel.
+        diff = "".join(difflib.unified_diff(
+            (before or "").splitlines(keepends=True), (body.rstrip() + "\n").splitlines(keepends=True),
+            fromfile=f"a/{step.target}" if before is not None else "/dev/null", tofile=f"b/{step.target}"))
+        self.changes = [(name, d) for name, d in self.changes if name != step.target] + [(step.target, diff)]
+
         backup = None
-        if path.exists():
+        if first and path.exists():
             backup = path.with_name(
                 f"{path.name}.jarvis-{datetime.now():%Y%m%d_%H%M%S}.bak"
             )
@@ -721,11 +777,50 @@ class Agent:
         except OSError as exc:
             raise AgentError(f"Writing {step.target} failed: {exc}")
 
-        self.written.append((path, backup))
-        security.audit.record("agent write", step.target,
-                              "new file" if backup is None else f"backup {backup.name}")
-        step.detail = f"{len(body.splitlines())} lines"
-        return f"--- {step.target} (now written) ---\n{body[:20000]}"
+        if first:
+            self.written.append((path, backup))
+            security.audit.record("agent write", step.target,
+                                  "new file" if backup is None else f"backup {backup.name}")
+        else:
+            security.audit.record("agent write", step.target, "revised after review")
+
+    # --- 14.3: agent teams ---------------------------------------------------
+
+    def _team(self):
+        from . import teams
+
+        if not teams.enabled():
+            return None
+        mode = getattr(getattr(self.jarvis.brain, "mode", None), "name", "mid")
+        return teams.team_for(mode)
+
+    def _team_review(self, team, step: Step, path: Path, body: str) -> str:
+        """Each checker reads the file; the lead fixes what they found, once."""
+        from . import teams
+
+        task = getattr(self, "task", "") or self.plan.goal
+        reviews = [teams.check(self.jarvis.brain, member, task, self.plan.goal, step.target, body)
+                   for member in team.checkers]
+        self.reviews.extend((step.target, review) for review in reviews)
+        issues = [f"{review.member}: {issue}" for review in reviews for issue in review.issues]
+        if not issues:
+            step.detail += " · checked ✓"
+            return body
+        answer = self._ask(
+            f"{WORKER_PROMPT}\n\nYour teammates reviewed {step.target} and found these problems. Fix every "
+            "one and keep everything else that works:\n" + "\n".join(f"- {i}" for i in issues)
+            + f"\n\nWhat the user asked: {task}\nGoal: {self.plan.goal}\n\n"
+            f"Current {step.target}:\n```{step.target}\n{body[:30000]}\n```"
+        )
+        try:
+            fixed = self._extract(answer, step)
+            self._refuse_blanking(path, step, fixed)
+            self._save(step, path, fixed)
+        except AgentError:
+            step.detail += f" · {len(issues)} issue(s) found; the fix didn't come back, so the first version stays"
+            return body
+        step.detail = f"{len(fixed.splitlines())} lines · fixed {len(issues)} issue(s) after review"
+        return fixed
 
     def _do_test(self, step: Step) -> str:
         if not self._permitted("test", step.target):
@@ -790,6 +885,11 @@ class Agent:
         if self.written:
             lines.append("")
             lines.append(f"{len(self.written)} file(s) changed — /undo puts them back.")
+        if self.reviews:
+            lines += ["", f"Agent team — {self.plan.team}" if self.plan.team else "Agent team"]
+            for name, review in self.reviews:
+                lines.append(f"  {name} — {review.line()}")
+                lines += [f"      • {issue}" for issue in review.issues]
         used = list(dict.fromkeys(self.models_used))
         if used:
             lines.append("Model: " + ", then ".join(used))

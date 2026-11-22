@@ -47,6 +47,8 @@ if PALETTE["appearance"] == "light":
         pass
 # White is black on white: keep every button's text readable on hover.
 theme.patch_monochrome_buttons(ctk, PALETTE)
+# 14.3: round buttons and soft corners everywhere.
+theme.round_everything(ctk)
 
 PREVIEW_MAX = 420
 # An answer that took longer than this, while you were in another window,
@@ -103,6 +105,14 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         orb_module.PAUSED = lambda: not self.window_settled()
 
         self.title(f"JARVIS {__version__}")
+        # 14.3: our logo in the title bar and taskbar, not customtkinter's.
+        try:
+            from ui import logo
+
+            if logo.ico_path().exists():
+                self.iconbitmap(str(logo.ico_path()))
+        except Exception:
+            pass
         # Never taller or wider than the screen less the taskbar: on a
         # 1366×768 laptop, 720 high put the message box under the taskbar.
         width = min(1100, self.winfo_screenwidth() - 40)
@@ -149,6 +159,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         # Cowork jobs report from their own threads; every update comes back here.
         cowork.manager.subscribe(lambda job: safe_after(self, lambda j=job: self._cowork_update(j)))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # 14.4: minimize to the system tray.
+        from ui.tray import Tray
+
+        self._tray = Tray(self)
+        self.bind("<Unmap>", self._maybe_to_tray, add="+")
         self._bind_shortcuts()
         self._append_message("JARVIS", self.jarvis.greet(), is_user=False)
         self._report_env_migration()
@@ -234,13 +249,14 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         bottom.pack(side="bottom", fill="x")
 
         ctk.CTkFrame(bottom, height=1, fg_color=COLORS["accent_dim"]).pack(fill="x", padx=16, pady=(4, 6))
-        ctk.CTkLabel(
+        self._mode_heading = ctk.CTkLabel(
             bottom,
             text="THINKING MODE",
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color=COLORS["muted"],
             anchor="w",
-        ).pack(fill="x", padx=18)
+        )
+        self._mode_heading.pack(fill="x", padx=18)
 
         self.mode_btn = ctk.CTkButton(
             bottom,
@@ -366,17 +382,23 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.chat_frame.grid_columnconfigure(1, weight=1)
         self._build_chat_list()
 
+        # 14.3: the Modern look has no card around the chat, like Claude's;
+        # the text sits straight on the window in a centred column.
+        modern = self.chat_style() == "claude"
         self.chat_log = ctk.CTkTextbox(
             self.chat_frame,
             wrap="word",
             font=ctk.CTkFont(size=FONT_SIZE),
-            fg_color=COLORS["panel"],
+            fg_color=COLORS["bg"] if modern else COLORS["panel"],
             text_color=COLORS["text"],
             activate_scrollbars=True,
+            border_spacing=10 if modern else 3,
         )
         self.chat_log.grid(row=0, column=1, sticky="nsew", padx=16, pady=(16, 8))
         self._configure_tags()
         self.chat_log.configure(state="disabled")
+        _box = getattr(self.chat_log, "_textbox", self.chat_log)
+        _box.bind("<Configure>", lambda e, b=_box: self._chat_resized(b), add="+")
 
         input_row = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         input_row.grid(row=1, column=1, sticky="ew", padx=16, pady=(0, 16))
@@ -396,6 +418,15 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             font=ctk.CTkFont(size=14),
         )
         self.chat_input.pack(side="left", fill="x", expand=True)
+        # 14.3: the thinking mode is a small picker by the box, like Claude's
+        # model picker, instead of a block in the sidebar.
+        self.mode_pick = ctk.CTkButton(
+            entry_box, text="⚡ Mid  ▾", width=0, height=44, font=ctk.CTkFont(size=13),
+            fg_color=COLORS["panel"], hover_color=COLORS["accent_dim"], text_color=COLORS["text"],
+            command=self._mode_menu)
+        self.mode_pick.pack(side="right", padx=(6, 0), before=self.chat_input)
+        for widget in (self._mode_heading, self.mode_btn, self.mode_blurb, self.mode_pips):
+            widget.pack_forget()
 
         # Cowork's folder: the job works on it (shown while Cowork is on).
         self._cowork_folder = ""
@@ -480,13 +511,13 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             ("🗑 Clear", self._clear_chat),
         ):
             ctk.CTkButton(
-                quick, text=label, height=26, width=0,
+                quick, text=label, height=26, width=0, corner_radius=10,
                 font=ctk.CTkFont(size=11),
                 fg_color="transparent", hover_color=COLORS["accent_dim"],
                 text_color=COLORS["muted"], command=command,
-            ).pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(0, 2))
         self._handsfree_button = ctk.CTkButton(
-            quick, text="🎧 Hands-free", height=26, width=0, font=ctk.CTkFont(size=11),
+            quick, text="🎧 Hands-free", height=26, width=0, corner_radius=10, font=ctk.CTkFont(size=11),
             fg_color="transparent", hover_color=COLORS["accent_dim"], text_color=COLORS["muted"],
             command=lambda: self._quick(self._set_handsfree(not self._handsfree_on)),
         )
@@ -1582,7 +1613,8 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         if tab == "code" and not self.jarvis.brain.code_mode:
             self.jarvis.toggle_code_mode()
         elif tab == "chat" and self.jarvis.brain.code_mode:
-            self._append_message("JARVIS", self.jarvis.toggle_code_mode(), is_user=False)
+            # Silently: switching tabs is not something to announce in the chat.
+            self.jarvis.toggle_code_mode()
         self.refresh_code_mode()
 
     def follow_page(self, response) -> None:
@@ -1758,10 +1790,42 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
                 is_user=False,
             )
 
+    def _mode_menu(self) -> None:
+        """The picker's list: every mode with a line on what it's for."""
+        menu = tkinter.Menu(self, tearoff=0, bg=COLORS["panel"], fg=COLORS["text"],
+                            activebackground=COLORS["accent_dim"], activeforeground=COLORS["text"],
+                            font=("Segoe UI", 10), bd=0)
+        current = self.jarvis.brain.mode.name
+        for mode in modes.ALL:
+            mark = "✓ " if mode.name == current else "    "
+            menu.add_command(label=f"{mark}{mode.label}  —  {mode.blurb}",
+                             command=lambda n=mode.name: self._pick_mode(n))
+        button = self.mode_pick
+        try:
+            menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() - 26 * len(modes.ALL) - 8)
+        finally:
+            menu.grab_release()
+
+    def _pick_mode(self, name: str) -> None:
+        self.jarvis.brain.set_mode(name)
+        self.refresh_mode()
+        if name == "hyperdrive":
+            self._append_message(
+                "JARVIS",
+                "Hyperdrive engaged. I'll reach for kimi-k3 first and wait up "
+                "to 200 seconds; if it stays quiet I drop back to Max rather "
+                "than leave you hanging.",
+                is_user=False,
+            )
+
     def refresh_mode(self) -> None:
         mode = self.jarvis.brain.mode
         # A monochrome theme (White: black on white) keeps the modes black too.
         colour = COLORS["accent"] if COLORS["accent"] == COLORS["text"] else mode.accent
+        try:
+            self.mode_pick.configure(text=f"⚡ {mode.label}  ▾", text_color=colour)
+        except Exception:
+            pass
         try:
             self.mode_btn.configure(text=f"⚡  {mode.label}", text_color=colour)
             self.mode_blurb.configure(text=mode.blurb)
@@ -1805,6 +1869,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.chat_log.configure(state="normal")
         tag = "user" if is_user else "jarvis"
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        if self.chat_style() == "claude":
+            self._append_modern(textbox, text, is_user)
+            self.chat_log.configure(state="disabled")
+            self.chat_log.see("end")
+            return
         if is_user:
             avatar = self._avatar_image()
             if avatar is not None:
@@ -1825,12 +1894,125 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
+    # --- 14.3: the Modern look -----------------------------------------------
+
+    def _append_modern(self, textbox, text: str, is_user: bool) -> None:
+        """Your words in a rounded bubble on the right; JARVIS's as clean text."""
+        if textbox.index("end-1c") != "1.0" and textbox.get("end-2c", "end-1c") != "\n":
+            textbox.insert("end", "\n")
+        if is_user:
+            line = textbox.index("end-1c")
+            textbox.window_create("end", window=self._bubble(textbox, text), align="top")
+            textbox.insert("end", "\n")
+            textbox.tag_add("ububble", line, "end-1c")
+            # The words are kept in the text too, hidden, so Find, Export and
+            # copying the whole chat still see what you typed.
+            textbox.insert("end", f"{text}\n", ("uhidden", "ubody"))
+            return
+        start = textbox.index("end-1c")
+        render.insert(textbox, text, COLORS, on_code=self._code_buttons)
+        textbox.insert("end", "\n")
+        textbox.tag_add("jbody", start, "end-1c")
+        self._fade_in(textbox, start, "end-1c")
+
+    def _bubble(self, textbox, text: str):
+        """A rounded bubble for one of your messages."""
+        from ui.orb import _mix
+
+        background = str(textbox.cget("bg"))
+        width = textbox.winfo_width() if textbox.winfo_width() > 50 else 900
+        column = width - 2 * self.chat_margin(textbox)
+        size = getattr(self, "_font_size", FONT_SIZE)
+        fill = _mix(background, COLORS["text"], 0.09)
+        bubble = ctk.CTkLabel(textbox, text=text, wraplength=int(max(220, min(560, column * 0.78))),
+                              justify="left", anchor="w", fg_color=fill, bg_color=background,
+                              text_color=_mix(fill, COLORS["text"], 0.15), corner_radius=18,
+                              font=ctk.CTkFont(size=size), padx=14, pady=9)
+
+        def scroll(event):
+            textbox.yview_scroll(int(-event.delta / 120), "units")
+            return "break"
+
+        def copy(_event=None):
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self._quick("Copied your message")
+
+        bubble.bind("<MouseWheel>", scroll)
+        bubble.bind("<Button-3>", copy)
+        # The text fades in from the bubble's colour, like the replies do.
+        steps = 6
+        for i in range(1, steps + 1):
+            self.after(i * 30, lambda k=i / steps: bubble.winfo_exists()
+                       and bubble.configure(text_color=_mix(fill, COLORS["text"], k)))
+        return bubble
+
+    def _fade_in(self, textbox, start: str, end: str) -> None:
+        """New text arrives from the background colour instead of popping in."""
+        from ui.orb import _mix
+
+        self._fade_count = getattr(self, "_fade_count", 0) + 1
+        tag = f"fade{self._fade_count}"
+        background = str(textbox.cget("bg"))
+        try:
+            textbox.tag_add(tag, start, end)
+            textbox.tag_raise(tag)
+        except tkinter.TclError:
+            return
+        steps = 7
+
+        def step(i: int) -> None:
+            try:
+                if i > steps:
+                    textbox.tag_delete(tag)
+                    return
+                textbox.tag_config(tag, foreground=_mix(background, COLORS["text"], i / steps))
+                self.after(26, lambda: step(i + 1))
+            except tkinter.TclError:
+                pass
+
+        step(1)
+
+    # Three dots that pulse while JARVIS thinks, until the first words arrive.
+    _TYPING = ("●  ○  ○", "○  ●  ○", "○  ○  ●", "○  ●  ○")
+
+    def _show_typing(self, textbox) -> None:
+        textbox.insert("end", self._TYPING[0], "typing")
+        self._typing_frame = 0
+        self.after(260, lambda: self._typing_tick(textbox))
+
+    def _typing_tick(self, textbox) -> None:
+        try:
+            ranges = textbox.tag_ranges("typing")
+            if not ranges:
+                return
+            self._typing_frame = (getattr(self, "_typing_frame", 0) + 1) % len(self._TYPING)
+            state = str(textbox.cget("state"))
+            textbox.configure(state="normal")
+            textbox.delete(ranges[0], ranges[1])
+            textbox.insert(ranges[0], self._TYPING[self._typing_frame], "typing")
+            textbox.configure(state=state)
+            self.after(260, lambda: self._typing_tick(textbox))
+        except tkinter.TclError:
+            pass
+
+    def _clear_typing(self, textbox) -> None:
+        ranges = textbox.tag_ranges("typing")
+        if ranges:
+            try:
+                textbox.delete(ranges[0], ranges[-1])
+            except tkinter.TclError:
+                pass
+
     def _code_buttons(self, textbox, code: str, language: str, label: str) -> None:
         """Copy and Save under every code block."""
-        bar = tkinter.Frame(textbox, bg=COLORS["panel"])
-        style = dict(bg=COLORS["accent_dim"], fg=COLORS["text"], relief="flat", bd=0,
-                     padx=8, pady=1, font=("Segoe UI", 9), cursor="hand2",
-                     activebackground=COLORS["accent"])
+        background = str(textbox.cget("bg"))
+        bar = tkinter.Frame(textbox, bg=background)
+
+        def pill(text, command):
+            return ctk.CTkButton(bar, text=text, command=command, height=24, width=0, corner_radius=999,
+                                 font=ctk.CTkFont(size=11), fg_color=COLORS["accent_dim"],
+                                 hover_color=COLORS["accent"], text_color=COLORS["text"], bg_color=background)
 
         def copy() -> None:
             self.clipboard_clear()
@@ -1853,10 +2035,11 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
                 Path(chosen).write_text(code + "\n", encoding="utf-8")
                 self._quick(f"Saved {Path(chosen).name}")
 
-        copy_btn = tkinter.Button(bar, text="Copy", command=copy, **style)
-        copy_btn.pack(side="left", padx=(0, 4))
-        tkinter.Button(bar, text="Save…", command=save, **style).pack(side="left")
-        textbox.window_create("end", window=bar, padx=18)
+        copy_btn = pill("Copy", copy)
+        copy_btn.pack(side="left", padx=(0, 6))
+        pill("Save…", save).pack(side="left")
+        modern = self.chat_style() == "claude"
+        textbox.window_create("end", window=bar, padx=4 if modern else 18, pady=4)
         textbox.insert("end", "\n")
 
     def _report_env_migration(self) -> None:
@@ -2475,6 +2658,9 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
     def summon(self) -> None:
         """Raise and focus the window — called by the global-hotkey addon."""
         try:
+            tray_icon = getattr(self, "_tray", None)
+            if tray_icon is not None:
+                tray_icon.hide_icon()      # back from the tray
             self.deiconify()
             self.lift()
             self.focus_force()
@@ -2534,6 +2720,7 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
             # one to run straight into it.
             self._streaming = False
             self.chat_log.configure(state="normal")
+            self._clear_typing(getattr(self.chat_log, "_textbox", self.chat_log))
             getattr(self.chat_log, "_textbox", self.chat_log).insert("end", "\n\n")
             self.chat_log.configure(state="disabled")
         self._set_busy(False, "Stopped")
@@ -2551,20 +2738,31 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         """Open an empty JARVIS message that chunks will be written into."""
         self.chat_log.configure(state="normal")
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
-        textbox.insert("end", "JARVIS:\n", "jarvis")
+        if self.chat_style() == "claude":
+            if textbox.index("end-1c") != "1.0" and textbox.get("end-2c", "end-1c") != "\n":
+                textbox.insert("end", "\n")
+        else:
+            textbox.insert("end", "JARVIS:\n", "jarvis")
         # A mark rather than an index: the text before it can change length
         # (an error appended, the log trimmed) and a mark moves with it.
         textbox.mark_set("stream_start", "end-1c")
         textbox.mark_gravity("stream_start", "left")
         self._streaming = True
+        # 14.3: dots that pulse until the first words arrive.
+        self._show_typing(textbox)
         self.chat_log.configure(state="disabled")
+        self.chat_log.see("end")
 
     def _append_stream(self, piece: str) -> None:
         if not self._streaming:
             return
         self.chat_log.configure(state="normal")
         textbox = getattr(self.chat_log, "_textbox", self.chat_log)
+        self._clear_typing(textbox)
+        start = textbox.index("end-1c")
         textbox.insert("end", piece)
+        if self.chat_style() == "claude":
+            textbox.tag_add("jbody", start, "end-1c")
         self.chat_log.configure(state="disabled")
         self.chat_log.see("end")
 
@@ -2993,7 +3191,46 @@ class JarvisApp(EightUI, TenUI, ctk.CTk):
         self.status_label.configure(text=f"v{info.version} is ready to install.")
         UpdateDialog(self, info, downloaded=path)
 
+    # --- 14.4: minimize to tray ------------------------------------------------
+
+    def _maybe_to_tray(self, event) -> None:
+        """The window was minimized: go to the tray instead of the taskbar."""
+        if event.widget is not self:
+            return
+        from ui import tray
+
+        if not tray.enabled() or not self._tray.available():
+            return
+        self.after(30, self._to_tray)
+
+    def _to_tray(self) -> None:
+        try:
+            if self.state() != "iconic":
+                return
+        except tkinter.TclError:
+            return
+        if self._tray.show_icon():
+            self.withdraw()
+
+    def restore_from_tray(self) -> None:
+        self._tray.hide_icon()
+        try:
+            self.deiconify()
+            self.state("normal")
+            self.lift()
+            self.focus_force()
+        except tkinter.TclError:
+            pass
+
+    def quit_from_tray(self) -> None:
+        self._tray.hide_icon()
+        self._on_close()
+
     def _on_close(self) -> None:
+        try:
+            self._tray.hide_icon()
+        except Exception:
+            pass
         self._eight_close()
         try:
             self._ten_close()

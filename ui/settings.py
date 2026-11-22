@@ -372,11 +372,12 @@ class SettingsWindow(ctk.CTkToplevel):
                       command=lambda: (accent.delete(0, "end"), swatch.configure(fg_color=self.colors["accent"]))
                       ).pack(side="left", padx=4)
 
-        from ui.tenui import CHAT_STYLES
+        from ui.tenui import CHAT_STYLES, DEFAULT_CHAT_STYLE
 
         row = self._labelled(parent, "Chat style")
         menu = ctk.CTkOptionMenu(row, values=list(CHAT_STYLES.values()), width=140)
-        menu.set(CHAT_STYLES.get(self.original.get("JARVIS_CHAT_STYLE", "classic"), "Classic"))
+        menu.set(CHAT_STYLES.get(self.original.get("JARVIS_CHAT_STYLE", DEFAULT_CHAT_STYLE),
+                                 CHAT_STYLES[DEFAULT_CHAT_STYLE]))
         menu.pack(side="left")
         self.choices["JARVIS_CHAT_STYLE"] = (menu, {v: k for k, v in CHAT_STYLES.items()})
 
@@ -433,6 +434,22 @@ class SettingsWindow(ctk.CTkToplevel):
                  else "Off")
         menu.pack(side="left")
         self.choices["JARVIS_ADVANCED"] = (menu, {v: k for k, v in switch.items()})
+
+        # 14.3: agent teams — a lead agent writes, sub-agents check (models picked per mode).
+        row = self._labelled(parent, "Agent teams")
+        menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+        menu.set("On" if self.original.get("JARVIS_AGENT_TEAMS", "off").strip().lower() in {"on", "1", "true", "yes"}
+                 else "Off")
+        menu.pack(side="left")
+        self.choices["JARVIS_AGENT_TEAMS"] = (menu, {v: k for k, v in switch.items()})
+
+        # 14.4: minimizing puts JARVIS in the tray, by the clock.
+        row = self._labelled(parent, "Minimize to tray")
+        menu = ctk.CTkOptionMenu(row, values=list(switch.values()), width=90)
+        menu.set("Off" if self.original.get("JARVIS_TRAY", "on").strip().lower() in {"off", "0", "false", "no"}
+                 else "On")
+        menu.pack(side="left")
+        self.choices["JARVIS_TRAY"] = (menu, {v: k for k, v in switch.items()})
 
         # 13.4.2: previews first, and the smart router.
         row = self._labelled(parent, "Updates")

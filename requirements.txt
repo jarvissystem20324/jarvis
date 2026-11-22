@@ -6,6 +6,8 @@ sounddevice>=0.5.5
 numpy>=2.0.0
 pyttsx3>=2.99
 pypdf>=6.15.0
+# 14.4: minimize to the system tray.
+pystray>=0.19.5
 pyinstaller>=6.21.0
 # Optional: drag-and-drop onto the window. Without it the Attach
 # button still works, so it is not required.

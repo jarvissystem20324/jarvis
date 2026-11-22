@@ -27,6 +27,9 @@ hiddenimports = [
     # module present, frozen builds fall back to the OS certificate store and
     # fail on machines that lack the roots.
     "certifi",
+    # 14.4: the tray icon; pystray picks its Windows backend at runtime.
+    "pystray",
+    "pystray._win32",
 ]
 
 # customtkinter ships its theme JSON as package data.

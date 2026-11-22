@@ -30,7 +30,13 @@ def setting_on(name: str, default: str = "on") -> bool:
     return get_setting(name, default).strip().lower() not in {"off", "0", "false", "no"}
 
 
-CHAT_STYLES = {"classic": "Classic", "bubbles": "Bubbles", "compact": "Compact", "terminal": "Terminal"}
+CHAT_STYLES = {"claude": "Modern", "classic": "Classic", "bubbles": "Bubbles", "compact": "Compact",
+               "terminal": "Terminal"}
+# 14.3: the default look. Your messages in rounded bubbles on the right, JARVIS's
+# answers as clean text in a centred column, no "JARVIS:" labels.
+DEFAULT_CHAT_STYLE = "claude"
+# The reading column's widest width, in pixels.
+CHAT_COLUMN = 760
 
 
 def seq_label(sequence: str) -> str:
@@ -375,8 +381,49 @@ class TenUI:
     # --- chat styles and avatar -------------------------------------------------
 
     def chat_style(self) -> str:
-        style = get_setting("JARVIS_CHAT_STYLE", "classic").strip().lower()
-        return style if style in CHAT_STYLES else "classic"
+        style = get_setting("JARVIS_CHAT_STYLE", DEFAULT_CHAT_STYLE).strip().lower()
+        return style if style in CHAT_STYLES else DEFAULT_CHAT_STYLE
+
+    def chat_margin(self, textbox) -> int:
+        """Side margin that centres a CHAT_COLUMN-wide reading column."""
+        width = textbox.winfo_width()
+        if width < 50:
+            width = 900
+        return max(18, (width - CHAT_COLUMN) // 2)
+
+    def _claude_margins(self, textbox) -> None:
+        """Margins for the Modern look; rerun when the chat changes width."""
+        m = self.chat_margin(textbox)
+        textbox.tag_config("jbody", lmargin1=m, lmargin2=m, rmargin=m, spacing1=2, spacing3=2)
+        textbox.tag_config("ububble", justify="right", rmargin=m, spacing1=10, spacing3=14)
+        textbox.tag_config("typing", lmargin1=m)
+        textbox.tag_config("bullet", lmargin1=m + 14, lmargin2=m + 30)
+        # The margins take the window's colour, so the code's dark box stays
+        # inside the reading column instead of running to the edge.
+        background = str(textbox.cget("bg"))
+        textbox.tag_config("code_bg", lmargin1=m + 14, lmargin2=m + 14, rmargin=m,
+                           lmargincolor=background, rmargincolor=background)
+        textbox.tag_config("fence", lmargin1=m + 14)
+        textbox.tag_config("h", lmargin1=m, lmargin2=m)
+        textbox.tag_config("jarvis", lmargin1=m)
+        self._claude_m = m
+
+    def _chat_resized(self, textbox) -> None:
+        if self.chat_style() != "claude":
+            return
+        pending = getattr(self, "_margin_job", None)
+        if pending:
+            try:
+                self.after_cancel(pending)
+            except Exception:
+                pass
+
+        def apply():
+            self._margin_job = None
+            if self.chat_margin(textbox) != getattr(self, "_claude_m", None):
+                self._claude_margins(textbox)
+
+        self._margin_job = self.after(80, apply)
 
     def _style_tags(self, textbox) -> None:
         colors = _ui().COLORS
@@ -389,7 +436,11 @@ class TenUI:
                                font="", foreground="")
         textbox.tag_config("user", justify="left", font="")
         textbox.tag_config("jarvis", font="")
-        if style == "bubbles":
+        textbox.tag_config("uhidden", elide=True)
+        textbox.tag_config("typing", foreground=colors["accent"], font=("Segoe UI", size + 2), spacing1=4)
+        if style == "claude":
+            self._claude_margins(textbox)
+        elif style == "bubbles":
             textbox.tag_config("user", justify="right", foreground=colors["user"])
             textbox.tag_config("ubody", background=_mix(colors["panel"], colors["user"], 0.16), lmargin1=160,
                                lmargin2=160, rmargin=12, spacing1=2, spacing3=4)
